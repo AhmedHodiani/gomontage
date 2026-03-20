@@ -130,20 +130,47 @@ type Base struct {
 	height     int
 }
 
-func (b *Base) ClipType() Type                 { return b.clipType }
-func (b *Base) Duration() time.Duration        { return b.duration }
-func (b *Base) TrimStart() time.Duration       { return b.trimStart }
-func (b *Base) TrimEnd() time.Duration         { return b.trimEnd }
-func (b *Base) IsTrimmed() bool                { return b.trimmed }
-func (b *Base) SourcePath() string             { return b.sourcePath }
-func (b *Base) HasVideo() bool                 { return b.hasVideo }
-func (b *Base) HasAudio() bool                 { return b.hasAudio }
-func (b *Base) Volume() float64                { return b.volume }
-func (b *Base) FadeInDuration() time.Duration  { return b.fadeIn }
+// ClipType implements Clip.
+func (b *Base) ClipType() Type { return b.clipType }
+
+// Duration implements Clip.
+func (b *Base) Duration() time.Duration { return b.duration }
+
+// TrimStart implements Clip.
+func (b *Base) TrimStart() time.Duration { return b.trimStart }
+
+// TrimEnd implements Clip.
+func (b *Base) TrimEnd() time.Duration { return b.trimEnd }
+
+// IsTrimmed implements Clip.
+func (b *Base) IsTrimmed() bool { return b.trimmed }
+
+// SourcePath implements Clip.
+func (b *Base) SourcePath() string { return b.sourcePath }
+
+// HasVideo implements Clip.
+func (b *Base) HasVideo() bool { return b.hasVideo }
+
+// HasAudio implements Clip.
+func (b *Base) HasAudio() bool { return b.hasAudio }
+
+// Volume implements Clip.
+func (b *Base) Volume() float64 { return b.volume }
+
+// FadeInDuration implements Clip.
+func (b *Base) FadeInDuration() time.Duration { return b.fadeIn }
+
+// FadeOutDuration implements Clip.
 func (b *Base) FadeOutDuration() time.Duration { return b.fadeOut }
-func (b *Base) Pos() Position                  { return b.position }
-func (b *Base) Width() int                     { return b.width }
-func (b *Base) Height() int                    { return b.height }
+
+// Pos implements Clip.
+func (b *Base) Pos() Position { return b.position }
+
+// Width implements Clip.
+func (b *Base) Width() int { return b.width }
+
+// Height implements Clip.
+func (b *Base) Height() int { return b.height }
 
 func (b *Base) base() *Base {
 	// Return a shallow copy.

@@ -13,12 +13,15 @@ func docsCmd() *cobra.Command {
 		Short: "Generate API documentation",
 		Long: `Generates markdown documentation for the Gomontage API.
 
-The docs are written to a docs/ directory and cover:
-- Getting started guide
-- Clip types and methods
-- Timeline and track API
-- Effects
-- Export profiles`,
+Guide pages (getting started, clips, timeline, effects, export profiles) are
+copied from hand-written templates. API reference pages are auto-generated
+from Go source code — every exported type, function, method, and constant
+is documented with its full signature and doc comments.
+
+The docs are written to a docs/ directory and include:
+  - Hand-written guides (getting started, clips, timeline, effects, export)
+  - Auto-generated per-package API reference (clip, timeline, effects, export)
+  - API index with quick-reference tables`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			outputDir, _ := cmd.Flags().GetString("output")
 

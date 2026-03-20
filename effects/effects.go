@@ -47,9 +47,16 @@ func FadeIn(d time.Duration) *FadeInEffect {
 	return &FadeInEffect{duration: d}
 }
 
-func (e *FadeInEffect) Name() string       { return "fade_in" }
-func (e *FadeInEffect) Target() Target     { return TargetVideo }
+// Name implements Effect.
+func (e *FadeInEffect) Name() string { return "fade_in" }
+
+// Target implements Effect.
+func (e *FadeInEffect) Target() Target { return TargetVideo }
+
+// FilterName implements Effect.
 func (e *FadeInEffect) FilterName() string { return "fade" }
+
+// FilterParams implements Effect.
 func (e *FadeInEffect) FilterParams() map[string]string {
 	return map[string]string{
 		"t":  "in",
@@ -78,9 +85,16 @@ func FadeOutAt(start, duration time.Duration) *FadeOutEffect {
 	return &FadeOutEffect{duration: duration, startAt: start}
 }
 
-func (e *FadeOutEffect) Name() string       { return "fade_out" }
-func (e *FadeOutEffect) Target() Target     { return TargetVideo }
+// Name implements Effect.
+func (e *FadeOutEffect) Name() string { return "fade_out" }
+
+// Target implements Effect.
+func (e *FadeOutEffect) Target() Target { return TargetVideo }
+
+// FilterName implements Effect.
 func (e *FadeOutEffect) FilterName() string { return "fade" }
+
+// FilterParams implements Effect.
 func (e *FadeOutEffect) FilterParams() map[string]string {
 	return map[string]string{
 		"t":  "out",
@@ -122,9 +136,16 @@ func SlowDown(factor float64) *SpeedEffect {
 	return &SpeedEffect{factor: 1.0}
 }
 
-func (e *SpeedEffect) Name() string       { return "speed" }
-func (e *SpeedEffect) Target() Target     { return TargetVideo }
+// Name implements Effect.
+func (e *SpeedEffect) Name() string { return "speed" }
+
+// Target implements Effect.
+func (e *SpeedEffect) Target() Target { return TargetVideo }
+
+// FilterName implements Effect.
 func (e *SpeedEffect) FilterName() string { return "setpts" }
+
+// FilterParams implements Effect.
 func (e *SpeedEffect) FilterParams() map[string]string {
 	// PTS/factor: factor > 1 speeds up (fewer PTS per frame), < 1 slows down.
 	return map[string]string{
@@ -147,9 +168,16 @@ func AudioFadeIn(d time.Duration) *AudioFadeInEffect {
 	return &AudioFadeInEffect{duration: d}
 }
 
-func (e *AudioFadeInEffect) Name() string       { return "audio_fade_in" }
-func (e *AudioFadeInEffect) Target() Target     { return TargetAudio }
+// Name implements Effect.
+func (e *AudioFadeInEffect) Name() string { return "audio_fade_in" }
+
+// Target implements Effect.
+func (e *AudioFadeInEffect) Target() Target { return TargetAudio }
+
+// FilterName implements Effect.
 func (e *AudioFadeInEffect) FilterName() string { return "afade" }
+
+// FilterParams implements Effect.
 func (e *AudioFadeInEffect) FilterParams() map[string]string {
 	return map[string]string{
 		"t":  "in",
@@ -177,9 +205,16 @@ func AudioFadeOutAt(start, duration time.Duration) *AudioFadeOutEffect {
 	return &AudioFadeOutEffect{duration: duration, startAt: start}
 }
 
-func (e *AudioFadeOutEffect) Name() string       { return "audio_fade_out" }
-func (e *AudioFadeOutEffect) Target() Target     { return TargetAudio }
+// Name implements Effect.
+func (e *AudioFadeOutEffect) Name() string { return "audio_fade_out" }
+
+// Target implements Effect.
+func (e *AudioFadeOutEffect) Target() Target { return TargetAudio }
+
+// FilterName implements Effect.
 func (e *AudioFadeOutEffect) FilterName() string { return "afade" }
+
+// FilterParams implements Effect.
 func (e *AudioFadeOutEffect) FilterParams() map[string]string {
 	return map[string]string{
 		"t":  "out",
@@ -202,9 +237,16 @@ func Volume(level float64) *VolumeEffect {
 	return &VolumeEffect{level: level}
 }
 
-func (e *VolumeEffect) Name() string       { return "volume" }
-func (e *VolumeEffect) Target() Target     { return TargetAudio }
+// Name implements Effect.
+func (e *VolumeEffect) Name() string { return "volume" }
+
+// Target implements Effect.
+func (e *VolumeEffect) Target() Target { return TargetAudio }
+
+// FilterName implements Effect.
 func (e *VolumeEffect) FilterName() string { return "volume" }
+
+// FilterParams implements Effect.
 func (e *VolumeEffect) FilterParams() map[string]string {
 	return map[string]string{
 		"volume": formatFloat(e.level),
@@ -229,9 +271,16 @@ func NormalizeTo(lufs float64) *NormalizeEffect {
 	return &NormalizeEffect{targetLUFS: lufs}
 }
 
-func (e *NormalizeEffect) Name() string       { return "normalize" }
-func (e *NormalizeEffect) Target() Target     { return TargetAudio }
+// Name implements Effect.
+func (e *NormalizeEffect) Name() string { return "normalize" }
+
+// Target implements Effect.
+func (e *NormalizeEffect) Target() Target { return TargetAudio }
+
+// FilterName implements Effect.
 func (e *NormalizeEffect) FilterName() string { return "loudnorm" }
+
+// FilterParams implements Effect.
 func (e *NormalizeEffect) FilterParams() map[string]string {
 	return map[string]string{
 		"I": formatFloat(e.targetLUFS),
@@ -254,9 +303,16 @@ func AudioSpeed(factor float64) *AudioSpeedEffect {
 	return &AudioSpeedEffect{factor: factor}
 }
 
-func (e *AudioSpeedEffect) Name() string       { return "audio_speed" }
-func (e *AudioSpeedEffect) Target() Target     { return TargetAudio }
+// Name implements Effect.
+func (e *AudioSpeedEffect) Name() string { return "audio_speed" }
+
+// Target implements Effect.
+func (e *AudioSpeedEffect) Target() Target { return TargetAudio }
+
+// FilterName implements Effect.
 func (e *AudioSpeedEffect) FilterName() string { return "atempo" }
+
+// FilterParams implements Effect.
 func (e *AudioSpeedEffect) FilterParams() map[string]string {
 	return map[string]string{
 		"tempo": formatFloat(e.factor),
