@@ -71,6 +71,8 @@ func (c *Compiler) Compile(outputPath string, outputParams map[string]string) (*
 	cfg := c.timeline.Config()
 
 	// Phase 1: Process each video track — trim, apply per-clip effects.
+	// Also compile the audio stream from video clips that have audio,
+	// so that video and its accompanying audio can be concatenated together.
 	var videoLabels []clipLabel
 	for _, track := range c.timeline.videoTracks {
 		for _, entry := range track.Entries() {
@@ -78,19 +80,32 @@ func (c *Compiler) Compile(outputPath string, outputParams map[string]string) (*
 			if err != nil {
 				return nil, fmt.Errorf("track %q: %w", track.Name(), err)
 			}
+			// For video clips that have audio, compile the audio stream too.
+			for i, cl := range labels {
+				if cl.entry.Clip.HasAudio() && cl.entry.Clip.SourcePath() != "" {
+					audioLabel, err := c.compileAudioFromVideoEntry(cl.entry)
+					if err != nil {
+						return nil, fmt.Errorf("track %q audio: %w", track.Name(), err)
+					}
+					labels[i].audio = audioLabel
+				}
+			}
 			videoLabels = append(videoLabels, labels...)
 		}
 	}
 
-	// Phase 2: Concatenate video clips if there are multiple.
+	// Phase 2: Concatenate video clips (and their paired audio) if there are multiple.
+	// Audio from video clips must be concatenated in sync with the video, not mixed.
 	finalVideoLabel := ""
+	finalVideoAudioLabel := ""
 	if len(videoLabels) == 1 {
 		finalVideoLabel = videoLabels[0].video
+		finalVideoAudioLabel = videoLabels[0].audio
 	} else if len(videoLabels) > 1 {
-		finalVideoLabel = c.concatVideoClips(videoLabels)
+		finalVideoLabel, finalVideoAudioLabel = c.concatVideoClips(videoLabels)
 	}
 
-	// Phase 3: Process audio tracks.
+	// Phase 3: Process independent audio tracks (background music, narration, etc.).
 	var audioLabels []string
 	for _, track := range c.timeline.audioTracks {
 		for _, entry := range track.Entries() {
@@ -104,22 +119,13 @@ func (c *Compiler) Compile(outputPath string, outputParams map[string]string) (*
 		}
 	}
 
-	// Also collect audio from video tracks (video clips that have audio).
-	for _, track := range c.timeline.videoTracks {
-		for _, entry := range track.Entries() {
-			if entry.Clip.HasAudio() && entry.Clip.SourcePath() != "" {
-				label, err := c.compileAudioFromVideoEntry(entry)
-				if err != nil {
-					return nil, fmt.Errorf("video track %q audio: %w", track.Name(), err)
-				}
-				if label != "" {
-					audioLabels = append(audioLabels, label)
-				}
-			}
-		}
+	// Add the concatenated audio from video tracks as one of the audio streams
+	// to be mixed with independent audio tracks.
+	if finalVideoAudioLabel != "" {
+		audioLabels = append([]string{finalVideoAudioLabel}, audioLabels...)
 	}
 
-	// Phase 4: Mix audio if there are multiple audio streams.
+	// Phase 4: Mix audio if there are multiple independent audio streams.
 	finalAudioLabel := ""
 	if len(audioLabels) == 1 {
 		finalAudioLabel = audioLabels[0]
@@ -425,23 +431,64 @@ func (c *Compiler) compileAudioFromVideoEntry(entry Placement) (string, error) {
 }
 
 // concatVideoClips concatenates multiple video clip outputs using the concat filter.
-func (c *Compiler) concatVideoClips(labels []clipLabel) string {
+// If any clips have paired audio, the audio is concatenated alongside the video.
+// Returns the final video label and (if applicable) the final audio label.
+func (c *Compiler) concatVideoClips(labels []clipLabel) (string, string) {
+	// Check if any clips have audio to concatenate.
+	hasAudio := false
+	for _, cl := range labels {
+		if cl.audio != "" {
+			hasAudio = true
+			break
+		}
+	}
+
+	audioFlag := "0"
+	if hasAudio {
+		audioFlag = "1"
+	}
+
 	concatNode := c.graph.AddFilter("concat", map[string]string{
 		"n": fmt.Sprintf("%d", len(labels)),
 		"v": "1",
-		"a": "0",
+		"a": audioFlag,
 	})
-	concatLabel := c.nextLabelFor("vconcat", concatNode)
+	videoLabel := c.nextLabelFor("vconcat", concatNode)
 
+	// For concat with audio, FFmpeg expects interleaved inputs:
+	// [v0][a0][v1][a1]...concat=n=N:v=1:a=1[outv][outa]
+	// We connect video first, then audio for each segment, in order.
 	for _, cl := range labels {
-		// Find the node that produced this label.
 		node := c.findFilterByLabel(cl.video)
 		if node != nil {
 			c.graph.Connect(node, concatNode, cl.video, engine.StreamVideo)
 		}
+		if hasAudio {
+			if cl.audio != "" {
+				anode := c.findFilterByLabel(cl.audio)
+				if anode != nil {
+					c.graph.Connect(anode, concatNode, cl.audio, engine.StreamAudio)
+				}
+			} else {
+				// Clip has no audio — generate a silent placeholder so concat
+				// input count stays balanced.
+				silenceNode := c.graph.AddFilter("anullsrc", map[string]string{
+					"r":  "48000",
+					"cl": "stereo",
+					"d":  formatSeconds(cl.entry.Clip.Duration()),
+				})
+				silenceLabel := c.nextLabelFor("asilence", silenceNode)
+				c.graph.Connect(silenceNode, concatNode, silenceLabel, engine.StreamAudio)
+			}
+		}
 	}
 
-	return concatLabel
+	audioLabel := ""
+	if hasAudio {
+		audioLabel = c.nextLabelFor("aconcat", concatNode)
+	}
+
+	return videoLabel, audioLabel
 }
 
 // mixAudio mixes multiple audio streams using the amix filter.

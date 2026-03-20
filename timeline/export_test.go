@@ -247,3 +247,100 @@ func TestClip_IsTrimmed(t *testing.T) {
 		t.Error("trimmed audio clip should have IsTrimmed()=true")
 	}
 }
+
+func TestDryRun_ConcatAudioFromVideo(t *testing.T) {
+	// Regression test: when multiple trimmed video clips (with audio) are placed
+	// on a video track, the audio must be concatenated in sync with the video,
+	// NOT mixed with amix (which would overlap both audio streams at time 0).
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	video := clip.NewVideoWithDuration("s1e1.mp4", 60*time.Second)
+	intro := video.Trim(5*time.Second, 10*time.Second)
+	outro := video.Trim(15*time.Second, 20*time.Second)
+
+	track := tl.AddVideoTrack("main")
+	track.AddSequence(intro, outro)
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// The concat filter must include audio (a=1), not video-only (a=0).
+	if !strings.Contains(cmdStr, "a=1") {
+		t.Errorf("expected concat with a=1 for audio, got:\n%s", cmdStr)
+	}
+
+	// There should be NO amix — audio from video clips should be concatenated, not mixed.
+	if strings.Contains(cmdStr, "amix") {
+		t.Errorf("audio from video track clips should be concatenated, not mixed with amix, got:\n%s", cmdStr)
+	}
+
+	// Both atrim filters should be present (one per clip).
+	if !strings.Contains(cmdStr, "atrim") {
+		t.Errorf("expected atrim filters for audio trimming, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_ConcatVideoWithBGMusic(t *testing.T) {
+	// When video clips are concatenated AND there's a separate audio track,
+	// the video audio should be concatenated and then mixed with the bg music.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	video := clip.NewVideoWithDuration("footage.mp4", 60*time.Second)
+	part1 := video.Trim(0, 10*time.Second)
+	part2 := video.Trim(20*time.Second, 30*time.Second)
+
+	vTrack := tl.AddVideoTrack("main")
+	vTrack.AddSequence(part1, part2)
+
+	aTrack := tl.AddAudioTrack("music")
+	bgm := clip.NewAudioWithDuration("bgm.mp3", 30*time.Second)
+	aTrack.Add(bgm, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// Should have concat with audio (for video clips).
+	if !strings.Contains(cmdStr, "a=1") {
+		t.Errorf("expected concat with a=1, got:\n%s", cmdStr)
+	}
+
+	// Should have amix to layer the concatenated audio with the bg music.
+	if !strings.Contains(cmdStr, "amix") {
+		t.Errorf("expected amix to mix video audio with bg music, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_VideoOnlyClipsConcat(t *testing.T) {
+	// When video clips have no audio (VideoOnly), concat should use a=0.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	video := clip.NewVideoWithDuration("footage.mp4", 60*time.Second)
+	part1 := video.Trim(0, 10*time.Second).VideoOnly()
+	part2 := video.Trim(20*time.Second, 30*time.Second).VideoOnly()
+
+	track := tl.AddVideoTrack("main")
+	track.AddSequence(part1, part2)
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// With VideoOnly clips, concat should be video-only (a=0).
+	if strings.Contains(cmdStr, "a=1") {
+		t.Errorf("VideoOnly clips should produce concat with a=0, got:\n%s", cmdStr)
+	}
+	if strings.Contains(cmdStr, "atrim") {
+		t.Errorf("VideoOnly clips should not have atrim filters, got:\n%s", cmdStr)
+	}
+}
