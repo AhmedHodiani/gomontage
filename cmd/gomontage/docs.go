@@ -17,7 +17,6 @@ The docs are written to a docs/ directory and cover:
 - Getting started guide
 - Clip types and methods
 - Timeline and track API
-- Cut/transition types
 - Effects
 - Export profiles`,
 		RunE: func(cmd *cobra.Command, args []string) error {

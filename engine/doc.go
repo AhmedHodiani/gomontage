@@ -1,7 +1,7 @@
 // Package engine provides the low-level FFmpeg interface for Gomontage.
 //
 // This package is internal to the framework. Users of Gomontage interact
-// with higher-level abstractions (clip, timeline, cuts, effects) that
+// with higher-level abstractions (clip, timeline, effects) that
 // compile down to engine operations.
 //
 // The engine handles:

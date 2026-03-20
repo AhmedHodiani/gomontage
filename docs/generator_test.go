@@ -19,7 +19,6 @@ func TestGenerate(t *testing.T) {
 		"getting-started.md",
 		"clips.md",
 		"timeline.md",
-		"cuts.md",
 		"effects.md",
 		"export.md",
 		"api-reference.md",
@@ -106,16 +105,6 @@ func TestClipsDocContent(t *testing.T) {
 	}
 }
 
-func TestCutsDocContent(t *testing.T) {
-	content := cutsDoc()
-	cutTypes := []string{"Hard", "L-Cut", "J-Cut", "Dissolve", "CrossFade", "Jump Cut", "Dip to Black", "Wipe"}
-	for _, ct := range cutTypes {
-		if !strings.Contains(content, ct) {
-			t.Errorf("cuts doc missing cut type: %s", ct)
-		}
-	}
-}
-
 func TestEffectsDocContent(t *testing.T) {
 	content := effectsDoc()
 	effects := []string{"FadeIn", "FadeOut", "SpeedUp", "Volume", "Normalize", "AudioSpeed"}
@@ -141,7 +130,7 @@ func TestExportDocContent(t *testing.T) {
 
 func TestAPIReferenceDocContent(t *testing.T) {
 	content := apiReferenceDoc()
-	packages := []string{"clip", "timeline", "cuts", "effects", "export", "engine"}
+	packages := []string{"clip", "timeline", "effects", "export", "engine"}
 	for _, pkg := range packages {
 		if !strings.Contains(content, "`"+pkg+"`") {
 			t.Errorf("api-reference doc missing package: %s", pkg)

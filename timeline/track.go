@@ -101,26 +101,6 @@ func (t *VideoTrack) End() time.Duration {
 	return maxEnd
 }
 
-// TransitionAll sets the same transition between every pair of adjacent clips
-// on this track (in placement order). This is a convenience for applying
-// uniform transitions.
-//
-// Example:
-//
-//	track.AddSequence(clip1, clip2, clip3)
-//	track.TransitionAll(cuts.Dissolve(1 * time.Second))
-func (t *VideoTrack) TransitionAll(tr Transition) []TransitionEntry {
-	var entries []TransitionEntry
-	for i := 0; i < len(t.entries)-1; i++ {
-		entries = append(entries, TransitionEntry{
-			Transition: tr,
-			FromClip:   t.entries[i].Clip,
-			ToClip:     t.entries[i+1].Clip,
-		})
-	}
-	return entries
-}
-
 // AudioTrack is a named track that holds audio clips.
 // All audio tracks are mixed together in the final output.
 type AudioTrack struct {

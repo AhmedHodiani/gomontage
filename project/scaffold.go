@@ -117,16 +117,6 @@ func main() {
 	// bgMusic.Add(music.WithFadeIn(2*time.Second).WithFadeOut(3*time.Second), timeline.At(0))
 
 	// ---------------------------------------------------------------
-	// Add transitions between clips.
-	// ---------------------------------------------------------------
-
-	// Example: Add a dissolve between clips.
-	// tl.AddTransition(cuts.Dissolve(1*time.Second), intro, middleSection)
-
-	// Example: Apply the same transition to all adjacent clips.
-	// mainVideo.TransitionAll(cuts.JCut(500 * time.Millisecond))
-
-	// ---------------------------------------------------------------
 	// Export the final video.
 	// ---------------------------------------------------------------
 

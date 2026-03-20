@@ -183,25 +183,6 @@ func TestTimeline_Validate(t *testing.T) {
 	}
 }
 
-func TestVideoTrack_TransitionAll(t *testing.T) {
-	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
-	track := tl.AddVideoTrack("main")
-
-	c1 := clip.NewVideoWithDuration("a.mp4", 10*time.Second)
-	c2 := clip.NewVideoWithDuration("b.mp4", 10*time.Second)
-	c3 := clip.NewVideoWithDuration("c.mp4", 10*time.Second)
-
-	track.AddSequence(c1, c2, c3)
-
-	// Create a mock transition.
-	mockTr := &mockTransition{dur: 1 * time.Second}
-	entries := track.TransitionAll(mockTr)
-
-	if len(entries) != 2 {
-		t.Errorf("expected 2 transitions, got %d", len(entries))
-	}
-}
-
 func TestFormatSeconds(t *testing.T) {
 	tests := []struct {
 		input time.Duration
@@ -220,11 +201,3 @@ func TestFormatSeconds(t *testing.T) {
 		}
 	}
 }
-
-// mockTransition implements the Transition interface for testing.
-type mockTransition struct {
-	dur time.Duration
-}
-
-func (m *mockTransition) Type() TransitionType    { return TransitionHardCut }
-func (m *mockTransition) Duration() time.Duration { return m.dur }

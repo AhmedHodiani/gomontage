@@ -3,8 +3,6 @@ package timeline
 import (
 	"fmt"
 	"time"
-
-	"github.com/ahmedhodiani/gomontage/clip"
 )
 
 // Config holds the configuration for a new Timeline.
@@ -19,13 +17,12 @@ type Config struct {
 	FPS float64
 }
 
-// Timeline is the top-level container that holds all tracks, clips, and
-// transitions for a video editing project.
+// Timeline is the top-level container that holds all tracks and clips
+// for a video editing project.
 type Timeline struct {
 	config      Config
 	videoTracks []*VideoTrack
 	audioTracks []*AudioTrack
-	transitions []TransitionEntry
 }
 
 // New creates a new Timeline with the given configuration.
@@ -75,11 +72,6 @@ func (tl *Timeline) VideoTracks() []*VideoTrack {
 // AudioTracks returns all audio tracks in order.
 func (tl *Timeline) AudioTracks() []*AudioTrack {
 	return tl.audioTracks
-}
-
-// Transitions returns all registered transitions.
-func (tl *Timeline) Transitions() []TransitionEntry {
-	return tl.transitions
 }
 
 // Duration returns the total duration of the timeline, determined by
@@ -132,48 +124,4 @@ func (tl *Timeline) Validate() error {
 	}
 
 	return nil
-}
-
-// TransitionType identifies the kind of transition between clips.
-type TransitionType int
-
-const (
-	TransitionHardCut TransitionType = iota
-	TransitionDissolve
-	TransitionCrossFade
-	TransitionLCut
-	TransitionJCut
-	TransitionJumpCut
-	TransitionDipToBlack
-	TransitionDipToWhite
-	TransitionWipe
-)
-
-// Transition defines how two clips blend together.
-type Transition interface {
-	// Type returns the kind of transition.
-	Type() TransitionType
-
-	// Duration returns how long the transition lasts (overlap between clips).
-	Duration() time.Duration
-}
-
-// TransitionEntry records a transition placed between two specific clips.
-type TransitionEntry struct {
-	Transition Transition
-	FromClip   clip.Clip
-	ToClip     clip.Clip
-}
-
-// AddTransition registers a transition between two clips on the timeline.
-//
-// Example:
-//
-//	tl.AddTransition(cuts.Dissolve(1*time.Second), clip1, clip2)
-func (tl *Timeline) AddTransition(t Transition, from, to clip.Clip) {
-	tl.transitions = append(tl.transitions, TransitionEntry{
-		Transition: t,
-		FromClip:   from,
-		ToClip:     to,
-	})
 }

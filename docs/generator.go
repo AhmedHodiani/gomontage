@@ -29,7 +29,6 @@ func Generate(outputDir string) error {
 		{"getting-started.md", gettingStartedDoc()},
 		{"clips.md", clipsDoc()},
 		{"timeline.md", timelineDoc()},
-		{"cuts.md", cutsDoc()},
 		{"effects.md", effectsDoc()},
 		{"export.md", exportDoc()},
 		{"api-reference.md", apiReferenceDoc()},
@@ -129,9 +128,8 @@ gomontage probe resources/video/footage.mp4
 1. **Clips** are your media building blocks (video, audio, image, text, color)
 2. **Tracks** are named layers on the timeline (video tracks, audio tracks)
 3. **Timeline** is the master container that holds all tracks
-4. **Cuts** define transitions between adjacent clips
-5. **Effects** are transformations applied to clips
-6. **Export profiles** configure the output format and quality
+4. **Effects** are transformations applied to clips
+5. **Export profiles** configure the output format and quality
 `
 }
 
@@ -207,7 +205,7 @@ title := clip.NewText("Chapter 1", clip.TextStyle{
 
 ### ColorClip
 
-Solid color rectangles for backgrounds or transitions.
+Solid color rectangles for backgrounds.
 
 ` + "```go" + `
 black := clip.NewColor("#000000", 1920, 1080).WithDuration(2*time.Second)
@@ -307,79 +305,6 @@ Check for errors before exporting:
 if err := tl.Validate(); err != nil {
     log.Fatal(err)
 }
-` + "```" + `
-`
-}
-
-func cutsDoc() string {
-	return `# Cuts & Transitions
-
-Cuts define how two clips transition from one to the next.
-
-## Adding Transitions
-
-` + "```go" + `
-// Between specific clips
-tl.AddTransition(cuts.Dissolve(1*time.Second), clip1, clip2)
-
-// Same transition for all adjacent clips on a track
-track.TransitionAll(cuts.JCut(500*time.Millisecond))
-` + "```" + `
-
-## Cut Types
-
-### Hard Cut
-Instant switch. The default when no transition is specified.
-` + "```go" + `
-cuts.Hard()
-` + "```" + `
-
-### L-Cut
-Audio from the outgoing clip continues over the incoming clip's video.
-The edit forms an "L" shape on the timeline.
-` + "```go" + `
-cuts.LCut(2*time.Second) // Audio extends 2s into next clip
-` + "```" + `
-
-### J-Cut
-Audio from the incoming clip starts before its video appears.
-The edit forms a "J" shape. Builds anticipation.
-` + "```go" + `
-cuts.JCut(1*time.Second) // Audio starts 1s early
-` + "```" + `
-
-### Dissolve
-Crossfade between two video clips.
-` + "```go" + `
-cuts.Dissolve(1*time.Second)
-` + "```" + `
-
-### CrossFade
-Crossfade both video AND audio simultaneously.
-` + "```go" + `
-cuts.CrossFade(1*time.Second)
-` + "```" + `
-
-### Jump Cut
-Sharp, jarring cut. No blending.
-` + "```go" + `
-cuts.JumpCut()
-` + "```" + `
-
-### Dip to Black / White
-Fade out to a color, then fade in from that color.
-` + "```go" + `
-cuts.DipToBlack(1*time.Second)
-cuts.DipToWhite(500*time.Millisecond)
-` + "```" + `
-
-### Wipe
-Directional reveal of the incoming clip.
-` + "```go" + `
-cuts.Wipe(cuts.WipeLeft, 1*time.Second)
-cuts.Wipe(cuts.WipeRight, 1*time.Second)
-cuts.Wipe(cuts.WipeUp, 1*time.Second)
-cuts.Wipe(cuts.WipeDown, 1*time.Second)
 ` + "```" + `
 `
 }
@@ -504,7 +429,6 @@ This is a quick reference for all Gomontage packages and their main types.
 |---------|-------------|
 | ` + "`clip`" + ` | Media clip types (Video, Audio, Image, Text, Color) |
 | ` + "`timeline`" + ` | Track-based timeline and composition |
-| ` + "`cuts`" + ` | Transition types between clips |
 | ` + "`effects`" + ` | Audio and video effects |
 | ` + "`export`" + ` | Output profiles and presets |
 | ` + "`engine`" + ` | Low-level FFmpeg interface (internal) |
@@ -540,22 +464,7 @@ This is a quick reference for all Gomontage packages and their main types.
 - ` + "`.AddAudioTrack(name)`" + ` — add audio track
 - ` + "`track.Add(clip, At(time))`" + ` — place clip at time
 - ` + "`track.AddSequence(clips...)`" + ` — place clips back-to-back
-- ` + "`.AddTransition(tr, from, to)`" + ` — add transition between clips
 - ` + "`.Export(profile, path)`" + ` — render output
-
-## cuts
-
-| Function | Description |
-|----------|-------------|
-| ` + "`Hard()`" + ` | Instant cut |
-| ` + "`LCut(overlap)`" + ` | Audio extends past video cut |
-| ` + "`JCut(overlap)`" + ` | Audio starts before video cut |
-| ` + "`Dissolve(d)`" + ` | Video crossfade |
-| ` + "`CrossFade(d)`" + ` | Video + audio crossfade |
-| ` + "`JumpCut()`" + ` | Sharp, jarring cut |
-| ` + "`DipToBlack(d)`" + ` | Fade to black and back |
-| ` + "`DipToWhite(d)`" + ` | Fade to white and back |
-| ` + "`Wipe(dir, d)`" + ` | Directional wipe |
 
 ## effects
 

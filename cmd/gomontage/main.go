@@ -15,7 +15,7 @@ func main() {
 		Long: `Gomontage is a Go framework for editing videos with code.
 
 Write high-level Go code to trim clips, arrange them on tracks,
-add transitions, layer audio, and export professional video.
+layer audio, apply effects, and export professional video.
 
 Get started:
   gomontage init my-project    Create a new project
