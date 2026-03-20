@@ -19,6 +19,11 @@ type Compiler struct {
 	// mapping source path -> input node. This avoids duplicate -i entries.
 	inputMap map[string]*engine.Node
 
+	// labelMap tracks which node produces each named label. This allows
+	// findFilterByLabel to look up nodes by their output label without
+	// requiring the label to exist as an actual graph edge yet.
+	labelMap map[string]*engine.Node
+
 	// labelCounter generates unique filter graph labels.
 	labelCounter int
 }
@@ -29,6 +34,7 @@ func NewCompiler(tl *Timeline) *Compiler {
 		timeline: tl,
 		graph:    engine.NewGraph(),
 		inputMap: make(map[string]*engine.Node),
+		labelMap: make(map[string]*engine.Node),
 	}
 }
 
@@ -36,6 +42,13 @@ func NewCompiler(tl *Timeline) *Compiler {
 func (c *Compiler) nextLabel(prefix string) string {
 	c.labelCounter++
 	return fmt.Sprintf("%s%d", prefix, c.labelCounter)
+}
+
+// nextLabelFor generates a unique label and registers the given node as its producer.
+func (c *Compiler) nextLabelFor(prefix string, node *engine.Node) string {
+	label := c.nextLabel(prefix)
+	c.labelMap[label] = node
+	return label
 }
 
 // getOrAddInput returns the input node for a source path, adding it if needed.
@@ -167,18 +180,18 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 
 	// Apply trim if needed.
 	if cl.TrimStart() > 0 || cl.TrimEnd() < cl.Duration()+cl.TrimStart() {
-		trimLabel := c.nextLabel("vtrim")
 		trimNode := c.graph.AddFilter("trim", map[string]string{
 			"start": formatSeconds(cl.TrimStart()),
 			"end":   formatSeconds(cl.TrimEnd()),
 		})
+		trimLabel := c.nextLabelFor("vtrim", trimNode)
 		c.graph.Connect(lastNode, trimNode, currentLabel, engine.StreamVideo)
 
 		// After trim, reset PTS to start from 0.
-		setptsLabel := c.nextLabel("vpts")
 		setptsNode := c.graph.AddFilter("setpts", map[string]string{
 			"expr": "PTS-STARTPTS",
 		})
+		setptsLabel := c.nextLabelFor("vpts", setptsNode)
 		c.graph.Connect(trimNode, setptsNode, trimLabel, engine.StreamVideo)
 
 		currentLabel = setptsLabel
@@ -187,11 +200,11 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 
 	// Apply scale if the clip has specific dimensions.
 	if cl.Width() > 0 && cl.Height() > 0 {
-		scaleLabel := c.nextLabel("vscale")
 		scaleNode := c.graph.AddFilter("scale", map[string]string{
 			"w": fmt.Sprintf("%d", cl.Width()),
 			"h": fmt.Sprintf("%d", cl.Height()),
 		})
+		scaleLabel := c.nextLabelFor("vscale", scaleNode)
 		c.graph.Connect(lastNode, scaleNode, currentLabel, engine.StreamVideo)
 		currentLabel = scaleLabel
 		lastNode = scaleNode
@@ -199,12 +212,12 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 
 	// Apply fade in.
 	if cl.FadeInDuration() > 0 {
-		fadeLabel := c.nextLabel("vfin")
 		fadeNode := c.graph.AddFilter("fade", map[string]string{
 			"t":  "in",
 			"st": "0",
 			"d":  formatSeconds(cl.FadeInDuration()),
 		})
+		fadeLabel := c.nextLabelFor("vfin", fadeNode)
 		c.graph.Connect(lastNode, fadeNode, currentLabel, engine.StreamVideo)
 		currentLabel = fadeLabel
 		lastNode = fadeNode
@@ -213,12 +226,12 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 	// Apply fade out.
 	if cl.FadeOutDuration() > 0 {
 		fadeOutStart := cl.Duration() - cl.FadeOutDuration()
-		fadeLabel := c.nextLabel("vfout")
 		fadeNode := c.graph.AddFilter("fade", map[string]string{
 			"t":  "out",
 			"st": formatSeconds(fadeOutStart),
 			"d":  formatSeconds(cl.FadeOutDuration()),
 		})
+		fadeLabel := c.nextLabelFor("vfout", fadeNode)
 		c.graph.Connect(lastNode, fadeNode, currentLabel, engine.StreamVideo)
 		currentLabel = fadeLabel
 		lastNode = fadeNode
@@ -233,7 +246,6 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 // compileGeneratedClip handles color and text clips that don't come from files.
 func (c *Compiler) compileGeneratedClip(entry Placement, cfg Config) ([]clipLabel, error) {
 	cl := entry.Clip
-	label := c.nextLabel("gen")
 
 	switch v := cl.(type) {
 	case *clip.ColorClip:
@@ -252,20 +264,18 @@ func (c *Compiler) compileGeneratedClip(entry Placement, cfg Config) ([]clipLabe
 			"d": formatSeconds(v.Duration()),
 			"r": fmt.Sprintf("%g", cfg.FPS),
 		})
-		// Color filter has no input edge — it generates frames.
-		// We add an output edge with our label.
-		_ = node
+		label := c.nextLabelFor("gen", node)
 		return []clipLabel{{video: label, entry: entry}}, nil
 
 	case *clip.TextClip:
 		// Text clips use the drawtext filter on a color background.
-		bgLabel := c.nextLabel("txtbg")
-		_ = c.graph.AddFilter("color", map[string]string{
+		bgNode := c.graph.AddFilter("color", map[string]string{
 			"c": "black@0.0", // Transparent background.
 			"s": fmt.Sprintf("%dx%d", cfg.Width, cfg.Height),
 			"d": formatSeconds(v.Duration()),
 			"r": fmt.Sprintf("%g", cfg.FPS),
 		})
+		bgLabel := c.nextLabelFor("txtbg", bgNode)
 
 		textNode := c.graph.AddFilter("drawtext", map[string]string{
 			"text":      v.Text,
@@ -275,7 +285,8 @@ func (c *Compiler) compileGeneratedClip(entry Placement, cfg Config) ([]clipLabe
 		if v.Style.Font != "" {
 			textNode.Params["fontfile"] = v.Style.Font
 		}
-		_ = bgLabel
+		label := c.nextLabelFor("gen", textNode)
+		c.graph.Connect(bgNode, textNode, bgLabel, engine.StreamVideo)
 
 		return []clipLabel{{video: label, entry: entry}}, nil
 
@@ -301,17 +312,17 @@ func (c *Compiler) compileAudioEntry(entry Placement) (string, error) {
 
 	// Apply trim.
 	if cl.TrimStart() > 0 || cl.TrimEnd() < cl.Duration()+cl.TrimStart() {
-		trimLabel := c.nextLabel("atrim")
 		trimNode := c.graph.AddFilter("atrim", map[string]string{
 			"start": formatSeconds(cl.TrimStart()),
 			"end":   formatSeconds(cl.TrimEnd()),
 		})
+		trimLabel := c.nextLabelFor("atrim", trimNode)
 		c.graph.Connect(lastNode, trimNode, currentLabel, engine.StreamAudio)
 
-		aptsLabel := c.nextLabel("apts")
 		aptsNode := c.graph.AddFilter("asetpts", map[string]string{
 			"expr": "PTS-STARTPTS",
 		})
+		aptsLabel := c.nextLabelFor("apts", aptsNode)
 		c.graph.Connect(trimNode, aptsNode, trimLabel, engine.StreamAudio)
 
 		currentLabel = aptsLabel
@@ -320,10 +331,10 @@ func (c *Compiler) compileAudioEntry(entry Placement) (string, error) {
 
 	// Apply volume.
 	if cl.Volume() != 1.0 {
-		volLabel := c.nextLabel("avol")
 		volNode := c.graph.AddFilter("volume", map[string]string{
 			"volume": fmt.Sprintf("%g", cl.Volume()),
 		})
+		volLabel := c.nextLabelFor("avol", volNode)
 		c.graph.Connect(lastNode, volNode, currentLabel, engine.StreamAudio)
 		currentLabel = volLabel
 		lastNode = volNode
@@ -331,12 +342,12 @@ func (c *Compiler) compileAudioEntry(entry Placement) (string, error) {
 
 	// Apply audio fade in.
 	if cl.FadeInDuration() > 0 {
-		fadeLabel := c.nextLabel("afin")
 		fadeNode := c.graph.AddFilter("afade", map[string]string{
 			"t":  "in",
 			"st": "0",
 			"d":  formatSeconds(cl.FadeInDuration()),
 		})
+		fadeLabel := c.nextLabelFor("afin", fadeNode)
 		c.graph.Connect(lastNode, fadeNode, currentLabel, engine.StreamAudio)
 		currentLabel = fadeLabel
 		lastNode = fadeNode
@@ -345,12 +356,12 @@ func (c *Compiler) compileAudioEntry(entry Placement) (string, error) {
 	// Apply audio fade out.
 	if cl.FadeOutDuration() > 0 {
 		fadeOutStart := cl.Duration() - cl.FadeOutDuration()
-		fadeLabel := c.nextLabel("afout")
 		fadeNode := c.graph.AddFilter("afade", map[string]string{
 			"t":  "out",
 			"st": formatSeconds(fadeOutStart),
 			"d":  formatSeconds(cl.FadeOutDuration()),
 		})
+		fadeLabel := c.nextLabelFor("afout", fadeNode)
 		c.graph.Connect(lastNode, fadeNode, currentLabel, engine.StreamAudio)
 		currentLabel = fadeLabel
 		lastNode = fadeNode
@@ -358,14 +369,12 @@ func (c *Compiler) compileAudioEntry(entry Placement) (string, error) {
 
 	// Apply delay if the clip doesn't start at 0.
 	if entry.StartAt > 0 {
-		delayLabel := c.nextLabel("adel")
-		delayMs := entry.StartAt.Milliseconds()
 		delayNode := c.graph.AddFilter("adelay", map[string]string{
-			"delays": fmt.Sprintf("%d|%d", delayMs, delayMs),
+			"delays": fmt.Sprintf("%d|%d", entry.StartAt.Milliseconds(), entry.StartAt.Milliseconds()),
 		})
+		delayLabel := c.nextLabelFor("adel", delayNode)
 		c.graph.Connect(lastNode, delayNode, currentLabel, engine.StreamAudio)
 		currentLabel = delayLabel
-		_ = delayNode
 	}
 
 	return currentLabel, nil
@@ -384,17 +393,17 @@ func (c *Compiler) compileAudioFromVideoEntry(entry Placement) (string, error) {
 
 	// Apply trim.
 	if cl.TrimStart() > 0 || cl.TrimEnd() < cl.Duration()+cl.TrimStart() {
-		trimLabel := c.nextLabel("vatrim")
 		trimNode := c.graph.AddFilter("atrim", map[string]string{
 			"start": formatSeconds(cl.TrimStart()),
 			"end":   formatSeconds(cl.TrimEnd()),
 		})
+		trimLabel := c.nextLabelFor("vatrim", trimNode)
 		c.graph.Connect(lastNode, trimNode, currentLabel, engine.StreamAudio)
 
-		aptsLabel := c.nextLabel("vapts")
 		aptsNode := c.graph.AddFilter("asetpts", map[string]string{
 			"expr": "PTS-STARTPTS",
 		})
+		aptsLabel := c.nextLabelFor("vapts", aptsNode)
 		c.graph.Connect(trimNode, aptsNode, trimLabel, engine.StreamAudio)
 
 		currentLabel = aptsLabel
@@ -403,13 +412,13 @@ func (c *Compiler) compileAudioFromVideoEntry(entry Placement) (string, error) {
 
 	// Apply volume.
 	if cl.Volume() != 1.0 {
-		volLabel := c.nextLabel("vavol")
 		volNode := c.graph.AddFilter("volume", map[string]string{
 			"volume": fmt.Sprintf("%g", cl.Volume()),
 		})
+		volLabel := c.nextLabelFor("vavol", volNode)
 		c.graph.Connect(lastNode, volNode, currentLabel, engine.StreamAudio)
 		currentLabel = volLabel
-		_ = volNode
+		lastNode = volNode
 	}
 
 	return currentLabel, nil
@@ -417,12 +426,12 @@ func (c *Compiler) compileAudioFromVideoEntry(entry Placement) (string, error) {
 
 // concatVideoClips concatenates multiple video clip outputs using the concat filter.
 func (c *Compiler) concatVideoClips(labels []clipLabel) string {
-	concatLabel := c.nextLabel("vconcat")
 	concatNode := c.graph.AddFilter("concat", map[string]string{
 		"n": fmt.Sprintf("%d", len(labels)),
 		"v": "1",
 		"a": "0",
 	})
+	concatLabel := c.nextLabelFor("vconcat", concatNode)
 
 	for _, cl := range labels {
 		// Find the node that produced this label.
@@ -437,11 +446,11 @@ func (c *Compiler) concatVideoClips(labels []clipLabel) string {
 
 // mixAudio mixes multiple audio streams using the amix filter.
 func (c *Compiler) mixAudio(labels []string) string {
-	mixLabel := c.nextLabel("amix")
 	mixNode := c.graph.AddFilter("amix", map[string]string{
 		"inputs":   fmt.Sprintf("%d", len(labels)),
 		"duration": "longest",
 	})
+	mixLabel := c.nextLabelFor("amix", mixNode)
 
 	for _, label := range labels {
 		node := c.findFilterByLabel(label)
@@ -453,9 +462,15 @@ func (c *Compiler) mixAudio(labels []string) string {
 	return mixLabel
 }
 
-// findFilterByLabel finds the filter node that has an output edge with the given label,
-// or an input node if the label matches the "N:v" or "N:a" pattern.
+// findFilterByLabel finds the node that produces the given label.
+// It checks the labelMap first, then falls back to input references ("N:v"/"N:a")
+// and output edge labels on filter nodes.
 func (c *Compiler) findFilterByLabel(label string) *engine.Node {
+	// Check the explicit label map first.
+	if node, ok := c.labelMap[label]; ok {
+		return node
+	}
+
 	// Check if it's a direct input reference like "0:v" or "1:a".
 	var inputIdx int
 	var streamChar string
