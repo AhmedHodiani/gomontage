@@ -5,7 +5,7 @@ package gomontage
 // (CLI --version, scaffolded go.mod, docs) derive from this constant.
 //
 // Update this value before tagging a new release.
-const Version = "0.1.0"
+const Version = "0.1.5"
 
 // GoVersion is the minimum Go version required by the Gomontage framework.
 // Scaffolded projects use this in their go.mod directive.

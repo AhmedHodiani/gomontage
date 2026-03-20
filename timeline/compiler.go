@@ -211,51 +211,61 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 	cl := entry.Clip
 	path := cl.SourcePath()
 
+	var currentLabel string
+	var lastNode *engine.Node
+
 	if path == "" {
-		// Generated clips (color, text) — handled differently.
-		return c.compileGeneratedClip(entry, cfg)
+		// Generated clips (color, text) — use source filters.
+		genLabel, genNode, err := c.compileGeneratedClip(entry, cfg)
+		if err != nil {
+			return nil, err
+		}
+		currentLabel = genLabel
+		lastNode = genNode
+	} else {
+		inputNode := c.getOrAddInput(path)
+		inputIdx := c.graph.InputIndex(inputNode)
+
+		// Start with the raw video stream.
+		currentLabel = fmt.Sprintf("%d:v", inputIdx)
+		lastNode = inputNode
+
+		// Apply trim if needed.
+		if cl.IsTrimmed() {
+			trimNode := c.graph.AddFilter("trim", map[string]string{
+				"start": formatSeconds(cl.TrimStart()),
+				"end":   formatSeconds(cl.TrimEnd()),
+			})
+			trimLabel := c.nextLabelFor("vtrim", trimNode)
+			c.graph.Connect(lastNode, trimNode, currentLabel, engine.StreamVideo)
+
+			// After trim, reset PTS to start from 0.
+			setptsNode := c.graph.AddFilter("setpts", map[string]string{
+				"expr": "PTS-STARTPTS",
+			})
+			setptsLabel := c.nextLabelFor("vpts", setptsNode)
+			c.graph.Connect(trimNode, setptsNode, trimLabel, engine.StreamVideo)
+
+			currentLabel = setptsLabel
+			lastNode = setptsNode
+		}
+
+		// Scale file-based clips to the timeline resolution so all segments
+		// match when concatenated. The timeline config is the single source
+		// of truth for output dimensions, just like a real NLE.
+		if cfg.Width > 0 && cfg.Height > 0 {
+			scaleNode := c.graph.AddFilter("scale", map[string]string{
+				"w": fmt.Sprintf("%d", cfg.Width),
+				"h": fmt.Sprintf("%d", cfg.Height),
+			})
+			scaleLabel := c.nextLabelFor("vscale", scaleNode)
+			c.graph.Connect(lastNode, scaleNode, currentLabel, engine.StreamVideo)
+			currentLabel = scaleLabel
+			lastNode = scaleNode
+		}
 	}
 
-	inputNode := c.getOrAddInput(path)
-	inputIdx := c.graph.InputIndex(inputNode)
-
-	// Start with the raw video stream.
-	currentLabel := fmt.Sprintf("%d:v", inputIdx)
-	var lastNode *engine.Node = inputNode
-
-	// Apply trim if needed.
-	if cl.IsTrimmed() {
-		trimNode := c.graph.AddFilter("trim", map[string]string{
-			"start": formatSeconds(cl.TrimStart()),
-			"end":   formatSeconds(cl.TrimEnd()),
-		})
-		trimLabel := c.nextLabelFor("vtrim", trimNode)
-		c.graph.Connect(lastNode, trimNode, currentLabel, engine.StreamVideo)
-
-		// After trim, reset PTS to start from 0.
-		setptsNode := c.graph.AddFilter("setpts", map[string]string{
-			"expr": "PTS-STARTPTS",
-		})
-		setptsLabel := c.nextLabelFor("vpts", setptsNode)
-		c.graph.Connect(trimNode, setptsNode, trimLabel, engine.StreamVideo)
-
-		currentLabel = setptsLabel
-		lastNode = setptsNode
-	}
-
-	// Apply scale if the clip has specific dimensions.
-	if cl.Width() > 0 && cl.Height() > 0 {
-		scaleNode := c.graph.AddFilter("scale", map[string]string{
-			"w": fmt.Sprintf("%d", cl.Width()),
-			"h": fmt.Sprintf("%d", cl.Height()),
-		})
-		scaleLabel := c.nextLabelFor("vscale", scaleNode)
-		c.graph.Connect(lastNode, scaleNode, currentLabel, engine.StreamVideo)
-		currentLabel = scaleLabel
-		lastNode = scaleNode
-	}
-
-	// Apply fade in.
+	// Apply fade in (works for both generated and file-based clips).
 	if cl.FadeInDuration() > 0 {
 		fadeNode := c.graph.AddFilter("fade", map[string]string{
 			"t":  "in",
@@ -268,7 +278,7 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 		lastNode = fadeNode
 	}
 
-	// Apply fade out.
+	// Apply fade out (works for both generated and file-based clips).
 	if cl.FadeOutDuration() > 0 {
 		fadeOutStart := cl.Duration() - cl.FadeOutDuration()
 		fadeNode := c.graph.AddFilter("fade", map[string]string{
@@ -289,7 +299,9 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 }
 
 // compileGeneratedClip handles color and text clips that don't come from files.
-func (c *Compiler) compileGeneratedClip(entry Placement, cfg Config) ([]clipLabel, error) {
+// It returns the output label and the last node in the filter chain, so that
+// the caller can continue applying effects (fades, etc.) to the generated clip.
+func (c *Compiler) compileGeneratedClip(entry Placement, cfg Config) (string, *engine.Node, error) {
 	cl := entry.Clip
 
 	switch v := cl.(type) {
@@ -310,12 +322,21 @@ func (c *Compiler) compileGeneratedClip(entry Placement, cfg Config) ([]clipLabe
 			"r": fmt.Sprintf("%g", cfg.FPS),
 		})
 		label := c.nextLabelFor("gen", node)
-		return []clipLabel{{video: label, entry: entry}}, nil
+
+		// Normalize pixel format to yuv420p so generated clips can be
+		// concatenated with real video (which is typically yuv420p).
+		fmtNode := c.graph.AddFilter("format", map[string]string{
+			"pix_fmts": "yuv420p",
+		})
+		fmtLabel := c.nextLabelFor("genfmt", fmtNode)
+		c.graph.Connect(node, fmtNode, label, engine.StreamVideo)
+
+		return fmtLabel, fmtNode, nil
 
 	case *clip.TextClip:
-		// Text clips use the drawtext filter on a color background.
+		// Text clips use the drawtext filter on a solid color background.
 		bgNode := c.graph.AddFilter("color", map[string]string{
-			"c": "black@0.0", // Transparent background.
+			"c": "black",
 			"s": fmt.Sprintf("%dx%d", cfg.Width, cfg.Height),
 			"d": formatSeconds(v.Duration()),
 			"r": fmt.Sprintf("%g", cfg.FPS),
@@ -330,13 +351,20 @@ func (c *Compiler) compileGeneratedClip(entry Placement, cfg Config) ([]clipLabe
 		if v.Style.Font != "" {
 			textNode.Params["fontfile"] = v.Style.Font
 		}
-		label := c.nextLabelFor("gen", textNode)
+		textLabel := c.nextLabelFor("gen", textNode)
 		c.graph.Connect(bgNode, textNode, bgLabel, engine.StreamVideo)
 
-		return []clipLabel{{video: label, entry: entry}}, nil
+		// Normalize pixel format to yuv420p for concat compatibility.
+		fmtNode := c.graph.AddFilter("format", map[string]string{
+			"pix_fmts": "yuv420p",
+		})
+		fmtLabel := c.nextLabelFor("genfmt", fmtNode)
+		c.graph.Connect(textNode, fmtNode, textLabel, engine.StreamVideo)
+
+		return fmtLabel, fmtNode, nil
 
 	default:
-		return nil, fmt.Errorf("unsupported generated clip type: %T", cl)
+		return "", nil, fmt.Errorf("unsupported generated clip type: %T", cl)
 	}
 }
 
