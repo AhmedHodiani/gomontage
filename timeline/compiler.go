@@ -243,6 +243,19 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 		lastNode = fadeNode
 	}
 
+	// Apply video delay if the clip doesn't start at time 0.
+	// tpad prepends black frames to shift the video forward on the timeline.
+	if entry.StartAt > 0 {
+		tpadNode := c.graph.AddFilter("tpad", map[string]string{
+			"start_duration": formatSeconds(entry.StartAt),
+			"color":          "black",
+		})
+		tpadLabel := c.nextLabelFor("vpad", tpadNode)
+		c.graph.Connect(lastNode, tpadNode, currentLabel, engine.StreamVideo)
+		currentLabel = tpadLabel
+		lastNode = tpadNode
+	}
+
 	return []clipLabel{{
 		video: currentLabel,
 		entry: entry,
@@ -425,6 +438,16 @@ func (c *Compiler) compileAudioFromVideoEntry(entry Placement) (string, error) {
 		c.graph.Connect(lastNode, volNode, currentLabel, engine.StreamAudio)
 		currentLabel = volLabel
 		lastNode = volNode
+	}
+
+	// Apply audio delay if the clip doesn't start at time 0.
+	if entry.StartAt > 0 {
+		delayNode := c.graph.AddFilter("adelay", map[string]string{
+			"delays": fmt.Sprintf("%d|%d", entry.StartAt.Milliseconds(), entry.StartAt.Milliseconds()),
+		})
+		delayLabel := c.nextLabelFor("vadel", delayNode)
+		c.graph.Connect(lastNode, delayNode, currentLabel, engine.StreamAudio)
+		currentLabel = delayLabel
 	}
 
 	return currentLabel, nil

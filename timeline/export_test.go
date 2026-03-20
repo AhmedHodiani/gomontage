@@ -344,3 +344,84 @@ func TestDryRun_VideoOnlyClipsConcat(t *testing.T) {
 		t.Errorf("VideoOnly clips should not have atrim filters, got:\n%s", cmdStr)
 	}
 }
+
+func TestDryRun_VideoStartAt(t *testing.T) {
+	// Regression test: a single video clip placed at 50s should produce a tpad
+	// filter to delay the video by 50 seconds of black frames.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	video := clip.NewVideoWithDuration("s1e1.mp4", 60*time.Second)
+	intro := video.Trim(5*time.Second, 10*time.Second)
+
+	track := tl.AddVideoTrack("main")
+	track.Add(intro, At(50*time.Second))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// The tpad filter must be present to delay the video.
+	if !strings.Contains(cmdStr, "tpad") {
+		t.Errorf("expected tpad filter for video placed at 50s, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "start_duration=50.000") {
+		t.Errorf("expected tpad start_duration=50.000, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_VideoStartAt_WithAudio(t *testing.T) {
+	// When a video clip with audio is placed at a non-zero time, both the video
+	// and its audio must be delayed — tpad for video, adelay for audio.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	video := clip.NewVideoWithDuration("clip.mp4", 60*time.Second)
+	segment := video.Trim(10*time.Second, 20*time.Second)
+
+	track := tl.AddVideoTrack("main")
+	track.Add(segment, At(30*time.Second))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// Video must be delayed with tpad.
+	if !strings.Contains(cmdStr, "tpad") {
+		t.Errorf("expected tpad for video delay, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "start_duration=30.000") {
+		t.Errorf("expected tpad start_duration=30.000, got:\n%s", cmdStr)
+	}
+
+	// Audio must be delayed with adelay (30s = 30000ms).
+	if !strings.Contains(cmdStr, "adelay") {
+		t.Errorf("expected adelay for audio from video clip, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "30000") {
+		t.Errorf("expected adelay of 30000ms, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_VideoStartAtZero_NoTpad(t *testing.T) {
+	// A clip placed at At(0) should NOT produce a tpad filter.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	video := clip.NewVideoWithDuration("clip.mp4", 10*time.Second)
+	track := tl.AddVideoTrack("main")
+	track.Add(video, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+	if strings.Contains(cmdStr, "tpad") {
+		t.Errorf("clip at time 0 should not have tpad, got:\n%s", cmdStr)
+	}
+}
