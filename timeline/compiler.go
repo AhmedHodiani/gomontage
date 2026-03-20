@@ -105,6 +105,45 @@ func (c *Compiler) Compile(outputPath string, outputParams map[string]string) (*
 		finalVideoLabel, finalVideoAudioLabel = c.concatVideoClips(videoLabels)
 	}
 
+	// Phase 2b: Apply timeline delay to the final video/audio.
+	// For a single clip, delay if its StartAt > 0.
+	// For a concatenated sequence, delay only if the first clip starts after 0
+	// (meaning the entire sequence is shifted forward on the timeline).
+	// Per-clip StartAt within a sequence is handled by concat ordering, not tpad.
+	if len(videoLabels) > 0 {
+		firstStartAt := videoLabels[0].entry.StartAt
+		if firstStartAt > 0 {
+			// Apply tpad to delay video.
+			tpadNode := c.graph.AddFilter("tpad", map[string]string{
+				"start_duration": formatSeconds(firstStartAt),
+				"color":          "black",
+			})
+			tpadLabel := c.nextLabelFor("vpad", tpadNode)
+			c.graph.Connect(
+				c.findFilterByLabel(finalVideoLabel),
+				tpadNode,
+				finalVideoLabel,
+				engine.StreamVideo,
+			)
+			finalVideoLabel = tpadLabel
+
+			// Apply adelay to paired audio from video.
+			if finalVideoAudioLabel != "" {
+				delayNode := c.graph.AddFilter("adelay", map[string]string{
+					"delays": fmt.Sprintf("%d|%d", firstStartAt.Milliseconds(), firstStartAt.Milliseconds()),
+				})
+				delayLabel := c.nextLabelFor("vadel", delayNode)
+				c.graph.Connect(
+					c.findFilterByLabel(finalVideoAudioLabel),
+					delayNode,
+					finalVideoAudioLabel,
+					engine.StreamAudio,
+				)
+				finalVideoAudioLabel = delayLabel
+			}
+		}
+	}
+
 	// Phase 3: Process independent audio tracks (background music, narration, etc.).
 	var audioLabels []string
 	for _, track := range c.timeline.audioTracks {
@@ -241,19 +280,6 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 		c.graph.Connect(lastNode, fadeNode, currentLabel, engine.StreamVideo)
 		currentLabel = fadeLabel
 		lastNode = fadeNode
-	}
-
-	// Apply video delay if the clip doesn't start at time 0.
-	// tpad prepends black frames to shift the video forward on the timeline.
-	if entry.StartAt > 0 {
-		tpadNode := c.graph.AddFilter("tpad", map[string]string{
-			"start_duration": formatSeconds(entry.StartAt),
-			"color":          "black",
-		})
-		tpadLabel := c.nextLabelFor("vpad", tpadNode)
-		c.graph.Connect(lastNode, tpadNode, currentLabel, engine.StreamVideo)
-		currentLabel = tpadLabel
-		lastNode = tpadNode
 	}
 
 	return []clipLabel{{
@@ -438,16 +464,6 @@ func (c *Compiler) compileAudioFromVideoEntry(entry Placement) (string, error) {
 		c.graph.Connect(lastNode, volNode, currentLabel, engine.StreamAudio)
 		currentLabel = volLabel
 		lastNode = volNode
-	}
-
-	// Apply audio delay if the clip doesn't start at time 0.
-	if entry.StartAt > 0 {
-		delayNode := c.graph.AddFilter("adelay", map[string]string{
-			"delays": fmt.Sprintf("%d|%d", entry.StartAt.Milliseconds(), entry.StartAt.Milliseconds()),
-		})
-		delayLabel := c.nextLabelFor("vadel", delayNode)
-		c.graph.Connect(lastNode, delayNode, currentLabel, engine.StreamAudio)
-		currentLabel = delayLabel
 	}
 
 	return currentLabel, nil

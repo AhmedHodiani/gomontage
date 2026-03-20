@@ -425,3 +425,76 @@ func TestDryRun_VideoStartAtZero_NoTpad(t *testing.T) {
 		t.Errorf("clip at time 0 should not have tpad, got:\n%s", cmdStr)
 	}
 }
+
+func TestDryRun_SequenceNoGap(t *testing.T) {
+	// Regression test: AddSequence places clips back-to-back by setting
+	// incremental StartAt values. The compiler must NOT apply tpad/adelay to
+	// individual clips in a sequence — concat handles ordering. Previously,
+	// tpad was applied per-clip, prepending black frames before the second clip
+	// and producing an unexpected gap.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	video := clip.NewVideoWithDuration("s1e1.mp4", 60*time.Second)
+	intro := video.Trim(5*time.Second, 10*time.Second)  // 5s
+	outro := video.Trim(10*time.Second, 25*time.Second) // 15s
+
+	track := tl.AddVideoTrack("main")
+	track.AddSequence(intro, outro)
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// The concat filter must be present.
+	if !strings.Contains(cmdStr, "concat") {
+		t.Errorf("expected concat filter for sequence, got:\n%s", cmdStr)
+	}
+
+	// There must be NO tpad — individual clips in a sequence should not be padded.
+	if strings.Contains(cmdStr, "tpad") {
+		t.Errorf("sequence clips should not have tpad (causes black gap), got:\n%s", cmdStr)
+	}
+
+	// There must be NO adelay on per-clip audio — audio is concatenated, not delayed.
+	if strings.Contains(cmdStr, "adelay") {
+		t.Errorf("sequence clips should not have adelay (audio is concatenated), got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_SequenceWithInitialOffset(t *testing.T) {
+	// A sequence that starts at a non-zero time (e.g., first clip at 10s) should
+	// apply tpad to the final concatenated output, not to individual clips.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	video := clip.NewVideoWithDuration("footage.mp4", 60*time.Second)
+	part1 := video.Trim(0, 5*time.Second)               // 5s
+	part2 := video.Trim(10*time.Second, 20*time.Second) // 10s
+
+	track := tl.AddVideoTrack("main")
+	// Manually place: first clip at 10s, second at 15s.
+	track.Add(part1, At(10*time.Second))
+	track.Add(part2, At(15*time.Second))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// The concat filter must be present (two clips).
+	if !strings.Contains(cmdStr, "concat") {
+		t.Errorf("expected concat filter, got:\n%s", cmdStr)
+	}
+
+	// tpad should be present (first clip starts at 10s, so the whole output is delayed).
+	if !strings.Contains(cmdStr, "tpad") {
+		t.Errorf("expected tpad for sequence starting at 10s, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "start_duration=10.000") {
+		t.Errorf("expected tpad start_duration=10.000, got:\n%s", cmdStr)
+	}
+}
