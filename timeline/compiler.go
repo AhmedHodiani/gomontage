@@ -179,7 +179,7 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 	var lastNode *engine.Node = inputNode
 
 	// Apply trim if needed.
-	if cl.TrimStart() > 0 || cl.TrimEnd() < cl.Duration()+cl.TrimStart() {
+	if cl.IsTrimmed() {
 		trimNode := c.graph.AddFilter("trim", map[string]string{
 			"start": formatSeconds(cl.TrimStart()),
 			"end":   formatSeconds(cl.TrimEnd()),
@@ -311,7 +311,7 @@ func (c *Compiler) compileAudioEntry(entry Placement) (string, error) {
 	var lastNode *engine.Node = inputNode
 
 	// Apply trim.
-	if cl.TrimStart() > 0 || cl.TrimEnd() < cl.Duration()+cl.TrimStart() {
+	if cl.IsTrimmed() {
 		trimNode := c.graph.AddFilter("atrim", map[string]string{
 			"start": formatSeconds(cl.TrimStart()),
 			"end":   formatSeconds(cl.TrimEnd()),
@@ -392,7 +392,7 @@ func (c *Compiler) compileAudioFromVideoEntry(entry Placement) (string, error) {
 	var lastNode *engine.Node = inputNode
 
 	// Apply trim.
-	if cl.TrimStart() > 0 || cl.TrimEnd() < cl.Duration()+cl.TrimStart() {
+	if cl.IsTrimmed() {
 		trimNode := c.graph.AddFilter("atrim", map[string]string{
 			"start": formatSeconds(cl.TrimStart()),
 			"end":   formatSeconds(cl.TrimEnd()),

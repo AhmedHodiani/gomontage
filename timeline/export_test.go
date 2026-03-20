@@ -129,3 +129,121 @@ func TestExport_InvalidTimeline(t *testing.T) {
 		t.Error("expected error for export on invalid timeline")
 	}
 }
+
+func TestDryRun_TrimFromZero(t *testing.T) {
+	// Regression test: Trim(0, 10s) on a 60s clip must produce a trim filter.
+	// Previously the compiler's condition missed this case, outputting the full clip.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+
+	video := clip.NewVideoWithDuration("long.mp4", 60*time.Second)
+	trimmed := video.Trim(0, 10*time.Second)
+	track.Add(trimmed, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// The trim filter must be present.
+	if !strings.Contains(cmdStr, "trim") {
+		t.Errorf("expected trim filter in command for Trim(0, 10s), got:\n%s", cmdStr)
+	}
+
+	// PTS reset must follow trim.
+	if !strings.Contains(cmdStr, "setpts") {
+		t.Errorf("expected setpts filter after trim, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_TrimFromMiddle(t *testing.T) {
+	// Trim from the middle of a clip should also produce trim filter.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+
+	video := clip.NewVideoWithDuration("long.mp4", 60*time.Second)
+	trimmed := video.Trim(20*time.Second, 40*time.Second)
+	track.Add(trimmed, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	if !strings.Contains(cmdStr, "trim") {
+		t.Errorf("expected trim filter in command for Trim(20s, 40s), got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_UntrimmedClip_NoTrimFilter(t *testing.T) {
+	// An untrimmed clip should NOT have a trim filter.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+	track.Add(clip.NewVideoWithDuration("full.mp4", 10*time.Second), At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// There should be no trim filter for an untrimmed clip.
+	if strings.Contains(cmdStr, "=start=") {
+		t.Errorf("untrimmed clip should not have trim filter, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_TrimmedAudioFromVideo(t *testing.T) {
+	// When a video clip with audio is trimmed, the audio stream should also be trimmed.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+
+	video := clip.NewVideoWithDuration("interview.mp4", 60*time.Second)
+	trimmed := video.Trim(5*time.Second, 15*time.Second)
+	track.Add(trimmed, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// Both video trim and audio trim should be present.
+	if !strings.Contains(cmdStr, "trim") {
+		t.Errorf("expected trim filter, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "atrim") {
+		t.Errorf("expected atrim filter for audio from trimmed video, got:\n%s", cmdStr)
+	}
+}
+
+func TestClip_IsTrimmed(t *testing.T) {
+	// Untrimmed clip should report IsTrimmed=false.
+	v := clip.NewVideoWithDuration("test.mp4", 60*time.Second)
+	if v.IsTrimmed() {
+		t.Error("untrimmed video clip should have IsTrimmed()=false")
+	}
+
+	// Trimmed clip should report IsTrimmed=true.
+	trimmed := v.Trim(0, 10*time.Second)
+	if !trimmed.IsTrimmed() {
+		t.Error("trimmed video clip should have IsTrimmed()=true")
+	}
+
+	// Audio clips too.
+	a := clip.NewAudioWithDuration("test.wav", 60*time.Second)
+	if a.IsTrimmed() {
+		t.Error("untrimmed audio clip should have IsTrimmed()=false")
+	}
+
+	aTrimmed := a.Trim(10*time.Second, 30*time.Second)
+	if !aTrimmed.IsTrimmed() {
+		t.Error("trimmed audio clip should have IsTrimmed()=true")
+	}
+}

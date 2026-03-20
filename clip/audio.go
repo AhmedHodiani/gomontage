@@ -66,6 +66,7 @@ func (c *AudioClip) Trim(start, end time.Duration) *AudioClip {
 	n.trimStart = start
 	n.trimEnd = end
 	n.duration = end - start
+	n.trimmed = true
 	return n
 }
 

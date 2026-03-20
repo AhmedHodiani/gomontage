@@ -76,6 +76,9 @@ type Clip interface {
 	// TrimEnd returns the end time of the trim window within the source.
 	TrimEnd() time.Duration
 
+	// IsTrimmed returns true if Trim() was explicitly called on this clip.
+	IsTrimmed() bool
+
 	// SourcePath returns the path to the source file, or empty for generated clips.
 	SourcePath() string
 
@@ -116,6 +119,7 @@ type Base struct {
 	duration   time.Duration
 	trimStart  time.Duration
 	trimEnd    time.Duration
+	trimmed    bool
 	hasVideo   bool
 	hasAudio   bool
 	volume     float64
@@ -130,6 +134,7 @@ func (b *Base) ClipType() Type                 { return b.clipType }
 func (b *Base) Duration() time.Duration        { return b.duration }
 func (b *Base) TrimStart() time.Duration       { return b.trimStart }
 func (b *Base) TrimEnd() time.Duration         { return b.trimEnd }
+func (b *Base) IsTrimmed() bool                { return b.trimmed }
 func (b *Base) SourcePath() string             { return b.sourcePath }
 func (b *Base) HasVideo() bool                 { return b.hasVideo }
 func (b *Base) HasAudio() bool                 { return b.hasAudio }
