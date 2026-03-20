@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	gomontage "github.com/ahmedhodiani/gomontage"
 )
 
 // Scaffold creates a new Gomontage project with the standard directory structure
@@ -146,10 +148,10 @@ func main() {
 func goModTemplate(projectName string) string {
 	return fmt.Sprintf(`module %s
 
-go 1.21
+go %s
 
-require github.com/ahmedhodiani/gomontage v0.0.0
-`, projectName)
+require github.com/ahmedhodiani/gomontage v%s
+`, projectName, gomontage.GoVersion, gomontage.Version)
 }
 
 func gitignoreTemplate() string {

@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"os"
 
+	gomontage "github.com/ahmedhodiani/gomontage"
 	"github.com/spf13/cobra"
 )
-
-// version is set at build time via ldflags.
-var version = "dev"
 
 func main() {
 	rootCmd := &cobra.Command{
@@ -24,7 +22,7 @@ Get started:
   gomontage run                Run the project's main.go
   gomontage probe video.mp4    Inspect a media file
   gomontage docs               Generate API documentation`,
-		Version: version,
+		Version: gomontage.Version,
 	}
 
 	rootCmd.AddCommand(
