@@ -498,3 +498,104 @@ func TestDryRun_SequenceWithInitialOffset(t *testing.T) {
 		t.Errorf("expected tpad start_duration=10.000, got:\n%s", cmdStr)
 	}
 }
+
+func TestDryRun_ImageClipInputParams(t *testing.T) {
+	// Image clips need -loop 1, -framerate, and -t input-level flags so FFmpeg
+	// produces a proper video stream from a still image.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+
+	img := clip.NewImage("title.png").WithDuration(4*time.Second).WithSize(1920, 1080)
+	track.Add(img, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// Input-level params must appear before -i.
+	if !strings.Contains(cmdStr, "-loop 1") {
+		t.Errorf("expected -loop 1 for image input, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "-framerate 30") {
+		t.Errorf("expected -framerate 30 for image input, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "-t 4.000") {
+		t.Errorf("expected -t 4.000 for image input, got:\n%s", cmdStr)
+	}
+
+	// Pixel format normalization must be present for concat compatibility.
+	if !strings.Contains(cmdStr, "format=pix_fmts=yuv420p") {
+		t.Errorf("expected format=pix_fmts=yuv420p for image clip, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_ImageThenVideoConcat(t *testing.T) {
+	// An image followed by a video clip should produce a concat filter.
+	// Both must be scaled and the image must have yuv420p format.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+
+	img := clip.NewImage("titlecard.png").WithDuration(4*time.Second).WithSize(1920, 1080)
+	video := clip.NewVideoWithDuration("footage.mp4", 30*time.Second).VideoOnly()
+
+	track.AddSequence(img, video)
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// Concat filter must be present.
+	if !strings.Contains(cmdStr, "concat") {
+		t.Errorf("expected concat filter for image+video sequence, got:\n%s", cmdStr)
+	}
+
+	// Image input must have loop/framerate/duration flags.
+	if !strings.Contains(cmdStr, "-loop 1") {
+		t.Errorf("expected -loop 1 for image in sequence, got:\n%s", cmdStr)
+	}
+
+	// Both inputs must be present.
+	if !strings.Contains(cmdStr, "titlecard.png") {
+		t.Errorf("expected titlecard.png input, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "footage.mp4") {
+		t.Errorf("expected footage.mp4 input, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_AmixNormalize(t *testing.T) {
+	// The amix filter must include normalize=0 to prevent FFmpeg from reducing
+	// each input's volume by dividing by the number of inputs.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	video := clip.NewVideoWithDuration("footage.mp4", 30*time.Second)
+	vTrack := tl.AddVideoTrack("main")
+	vTrack.Add(video, At(0))
+
+	aTrack := tl.AddAudioTrack("narration")
+	narration := clip.NewAudioWithDuration("narration.mp3", 30*time.Second)
+	aTrack.Add(narration, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// amix must be present (video audio + narration).
+	if !strings.Contains(cmdStr, "amix") {
+		t.Errorf("expected amix filter, got:\n%s", cmdStr)
+	}
+
+	// normalize=0 must be present to preserve volume levels.
+	if !strings.Contains(cmdStr, "normalize=0") {
+		t.Errorf("expected normalize=0 in amix filter to prevent volume reduction, got:\n%s", cmdStr)
+	}
+}

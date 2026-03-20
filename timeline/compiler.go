@@ -226,6 +226,15 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 		inputNode := c.getOrAddInput(path)
 		inputIdx := c.graph.InputIndex(inputNode)
 
+		// Image clips need special input-level flags to produce a video stream
+		// from a single still frame. Without these, FFmpeg reads one frame and
+		// the concat filter gets a near-zero-duration segment.
+		if cl.ClipType() == clip.TypeImage {
+			inputNode.Params["-loop"] = "1"
+			inputNode.Params["-framerate"] = fmt.Sprintf("%g", cfg.FPS)
+			inputNode.Params["-t"] = formatSeconds(cl.Duration())
+		}
+
 		// Start with the raw video stream.
 		currentLabel = fmt.Sprintf("%d:v", inputIdx)
 		lastNode = inputNode
@@ -262,6 +271,19 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 			c.graph.Connect(lastNode, scaleNode, currentLabel, engine.StreamVideo)
 			currentLabel = scaleLabel
 			lastNode = scaleNode
+		}
+
+		// Image clips need pixel format normalization to yuv420p so they can
+		// be concatenated with video clips (which are typically yuv420p).
+		// Generated clips (color, text) already get this in compileGeneratedClip.
+		if cl.ClipType() == clip.TypeImage {
+			fmtNode := c.graph.AddFilter("format", map[string]string{
+				"pix_fmts": "yuv420p",
+			})
+			fmtLabel := c.nextLabelFor("imgfmt", fmtNode)
+			c.graph.Connect(lastNode, fmtNode, currentLabel, engine.StreamVideo)
+			currentLabel = fmtLabel
+			lastNode = fmtNode
 		}
 	}
 
@@ -561,8 +583,9 @@ func (c *Compiler) concatVideoClips(labels []clipLabel) (string, string) {
 // mixAudio mixes multiple audio streams using the amix filter.
 func (c *Compiler) mixAudio(labels []string) string {
 	mixNode := c.graph.AddFilter("amix", map[string]string{
-		"inputs":   fmt.Sprintf("%d", len(labels)),
-		"duration": "longest",
+		"inputs":    fmt.Sprintf("%d", len(labels)),
+		"duration":  "longest",
+		"normalize": "0",
 	})
 	mixLabel := c.nextLabelFor("amix", mixNode)
 
