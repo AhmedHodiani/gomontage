@@ -80,6 +80,6 @@ func (c *ImageClip) WithFadeOut(d time.Duration) *ImageClip {
 //	    WithEffect(effects.FadeIn(1 * time.Second))
 func (c *ImageClip) WithEffect(e effects.Effect) *ImageClip {
 	n := &ImageClip{Base: *c.base()}
-	n.effects = append(n.effects, e)
+	n.applyEffect(e)
 	return n
 }

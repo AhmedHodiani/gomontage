@@ -147,6 +147,6 @@ func (c *VideoClip) VideoOnly() *VideoClip {
 //	    WithEffect(effects.FadeIn(1 * time.Second))
 func (c *VideoClip) WithEffect(e effects.Effect) *VideoClip {
 	n := &VideoClip{Base: *c.base()}
-	n.effects = append(n.effects, e)
+	n.applyEffect(e)
 	return n
 }

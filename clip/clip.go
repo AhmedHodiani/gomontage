@@ -196,3 +196,13 @@ func (b *Base) base() *Base {
 	}
 	return &cp
 }
+
+// applyEffect appends the effect and adjusts duration if the effect has a
+// duration factor other than 1.0 (e.g. speed changes).
+func (b *Base) applyEffect(e effects.Effect) {
+	b.effects = append(b.effects, e)
+	if f := e.DurationFactor(); f != 1.0 && f > 0 {
+		b.duration = time.Duration(float64(b.duration) * f)
+		b.trimEnd = b.trimStart + b.duration
+	}
+}

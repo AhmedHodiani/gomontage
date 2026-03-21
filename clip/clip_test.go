@@ -282,7 +282,7 @@ func TestType_String(t *testing.T) {
 func TestVideoClip_WithEffect(t *testing.T) {
 	original := NewVideoWithDuration("test.mp4", 30*time.Second)
 
-	// Apply a single effect.
+	// Apply a single speed effect — should adjust duration.
 	withSpeed := original.WithEffect(effects.SpeedUp(2.0))
 	if len(withSpeed.Effects()) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(withSpeed.Effects()))
@@ -290,13 +290,19 @@ func TestVideoClip_WithEffect(t *testing.T) {
 	if withSpeed.Effects()[0].Name() != "speed" {
 		t.Errorf("expected effect name 'speed', got %q", withSpeed.Effects()[0].Name())
 	}
+	if withSpeed.Duration() != 15*time.Second {
+		t.Errorf("SpeedUp(2.0) on 30s clip: expected 15s, got %v", withSpeed.Duration())
+	}
 
 	// Original should be unchanged.
 	if len(original.Effects()) != 0 {
 		t.Error("WithEffect mutated original clip")
 	}
+	if original.Duration() != 30*time.Second {
+		t.Error("WithEffect mutated original clip duration")
+	}
 
-	// Stack multiple effects.
+	// Stack multiple effects — only speed affects duration.
 	stacked := original.
 		WithEffect(effects.FadeIn(1 * time.Second)).
 		WithEffect(effects.FadeOut(2 * time.Second)).
@@ -313,6 +319,10 @@ func TestVideoClip_WithEffect(t *testing.T) {
 	if stacked.Effects()[2].Name() != "speed" {
 		t.Errorf("expected third effect 'speed', got %q", stacked.Effects()[2].Name())
 	}
+	// 30s / 1.5 = 20s
+	if stacked.Duration() != 20*time.Second {
+		t.Errorf("SpeedUp(1.5) on 30s clip: expected 20s, got %v", stacked.Duration())
+	}
 }
 
 func TestVideoClip_WithEffect_Chaining(t *testing.T) {
@@ -323,8 +333,9 @@ func TestVideoClip_WithEffect_Chaining(t *testing.T) {
 		WithEffect(effects.FadeIn(1 * time.Second)).
 		WithEffect(effects.SpeedUp(2.0))
 
-	if result.Duration() != 20*time.Second {
-		t.Errorf("expected 20s, got %v", result.Duration())
+	// Trim gives 20s, SpeedUp(2.0) halves to 10s.
+	if result.Duration() != 10*time.Second {
+		t.Errorf("expected 10s, got %v", result.Duration())
 	}
 	if result.Volume() != 0.5 {
 		t.Errorf("expected volume 0.5, got %f", result.Volume())
@@ -421,5 +432,46 @@ func TestEffects_Immutability(t *testing.T) {
 	// Internal effects should not be affected.
 	if c.Effects()[0].Name() != "fade_in" {
 		t.Error("Effects() returned the internal slice instead of a copy")
+	}
+}
+
+func TestWithEffect_DurationAdjustment(t *testing.T) {
+	// SpeedUp(2.0) should halve the duration.
+	v := NewVideoWithDuration("test.mp4", 60*time.Second).
+		WithEffect(effects.SpeedUp(2.0))
+	if v.Duration() != 30*time.Second {
+		t.Errorf("SpeedUp(2.0) on 60s: expected 30s, got %v", v.Duration())
+	}
+
+	// SlowDown(2.0) should double the duration.
+	v2 := NewVideoWithDuration("test.mp4", 30*time.Second).
+		WithEffect(effects.SlowDown(2.0))
+	if v2.Duration() != 60*time.Second {
+		t.Errorf("SlowDown(2.0) on 30s: expected 60s, got %v", v2.Duration())
+	}
+
+	// AudioSpeed(2.0) should halve audio duration.
+	a := NewAudioWithDuration("music.mp3", 60*time.Second).
+		WithEffect(effects.AudioSpeed(2.0))
+	if a.Duration() != 30*time.Second {
+		t.Errorf("AudioSpeed(2.0) on 60s: expected 30s, got %v", a.Duration())
+	}
+
+	// Non-speed effects should not change duration.
+	a2 := NewAudioWithDuration("music.mp3", 60*time.Second).
+		WithEffect(effects.Volume(0.5)).
+		WithEffect(effects.AudioFadeIn(2 * time.Second)).
+		WithEffect(effects.Normalize())
+	if a2.Duration() != 60*time.Second {
+		t.Errorf("Non-speed effects changed duration: expected 60s, got %v", a2.Duration())
+	}
+}
+
+func TestWithEffect_DurationOriginalUnchanged(t *testing.T) {
+	original := NewVideoWithDuration("test.mp4", 60*time.Second)
+	_ = original.WithEffect(effects.SpeedUp(2.0))
+
+	if original.Duration() != 60*time.Second {
+		t.Errorf("original duration changed: expected 60s, got %v", original.Duration())
 	}
 }

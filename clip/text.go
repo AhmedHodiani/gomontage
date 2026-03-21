@@ -126,6 +126,6 @@ func (c *TextClip) WithFadeOut(d time.Duration) *TextClip {
 //	    WithEffect(effects.FadeIn(1 * time.Second))
 func (c *TextClip) WithEffect(e effects.Effect) *TextClip {
 	n := &TextClip{Base: *c.base(), Text: c.Text, Style: c.Style}
-	n.effects = append(n.effects, e)
+	n.applyEffect(e)
 	return n
 }

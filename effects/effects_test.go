@@ -210,3 +210,43 @@ func TestEffectInterface(t *testing.T) {
 		}
 	}
 }
+
+func TestDurationFactor_NoChange(t *testing.T) {
+	// Effects that don't change duration should return 1.0.
+	noChange := []Effect{
+		FadeIn(time.Second),
+		FadeOut(time.Second),
+		AudioFadeIn(time.Second),
+		AudioFadeOut(time.Second),
+		Volume(0.5),
+		Normalize(),
+	}
+
+	for _, e := range noChange {
+		if f := e.DurationFactor(); f != 1.0 {
+			t.Errorf("%s.DurationFactor() = %f, want 1.0", e.Name(), f)
+		}
+	}
+}
+
+func TestDurationFactor_Speed(t *testing.T) {
+	tests := []struct {
+		name   string
+		effect Effect
+		want   float64
+	}{
+		{"SpeedUp 2x", SpeedUp(2.0), 0.5},
+		{"SpeedUp 0.5x", SpeedUp(0.5), 2.0},
+		{"SlowDown 2x", SlowDown(2.0), 2.0},
+		{"SlowDown 0 (safe)", SlowDown(0), 1.0},
+		{"AudioSpeed 1.5x", AudioSpeed(1.5), 1.0 / 1.5},
+		{"AudioSpeed 0.5x", AudioSpeed(0.5), 2.0},
+	}
+
+	for _, tt := range tests {
+		got := tt.effect.DurationFactor()
+		if got != tt.want {
+			t.Errorf("%s: DurationFactor() = %f, want %f", tt.name, got, tt.want)
+		}
+	}
+}

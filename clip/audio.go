@@ -125,6 +125,6 @@ func (c *AudioClip) WithDuration(d time.Duration) *AudioClip {
 //	    WithEffect(effects.AudioFadeIn(2 * time.Second))
 func (c *AudioClip) WithEffect(e effects.Effect) *AudioClip {
 	n := &AudioClip{Base: *c.base()}
-	n.effects = append(n.effects, e)
+	n.applyEffect(e)
 	return n
 }

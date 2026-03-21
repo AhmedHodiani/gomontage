@@ -33,6 +33,11 @@ type Effect interface {
 
 	// FilterParams returns the FFmpeg filter parameters as key-value pairs.
 	FilterParams() map[string]string
+
+	// DurationFactor returns the multiplier this effect applies to the clip's
+	// duration. Most effects return 1.0 (no change). Speed effects return
+	// 1/factor (e.g. SpeedUp(2.0) returns 0.5, halving the duration).
+	DurationFactor() float64
 }
 
 // --- Video Effects ---
@@ -67,6 +72,9 @@ func (e *FadeInEffect) FilterParams() map[string]string {
 
 // Dur returns the fade duration.
 func (e *FadeInEffect) Dur() time.Duration { return e.duration }
+
+// DurationFactor implements Effect. Fade-in does not change duration.
+func (e *FadeInEffect) DurationFactor() float64 { return 1.0 }
 
 // FadeOutEffect fades the video to black (or transparent) at a given time.
 type FadeOutEffect struct {
@@ -108,6 +116,9 @@ func (e *FadeOutEffect) Dur() time.Duration { return e.duration }
 
 // StartAt returns when the fade begins (0 means "calculate from clip end").
 func (e *FadeOutEffect) StartAt() time.Duration { return e.startAt }
+
+// DurationFactor implements Effect. Fade-out does not change duration.
+func (e *FadeOutEffect) DurationFactor() float64 { return 1.0 }
 
 // SpeedEffect changes the playback speed of video.
 type SpeedEffect struct {
@@ -156,6 +167,15 @@ func (e *SpeedEffect) FilterParams() map[string]string {
 // Factor returns the speed multiplier.
 func (e *SpeedEffect) Factor() float64 { return e.factor }
 
+// DurationFactor implements Effect. Speed changes duration inversely:
+// 2x speed halves the duration, 0.5x speed doubles it.
+func (e *SpeedEffect) DurationFactor() float64 {
+	if e.factor == 0 {
+		return 1.0
+	}
+	return 1.0 / e.factor
+}
+
 // --- Audio Effects ---
 
 // AudioFadeInEffect fades audio in from silence.
@@ -188,6 +208,9 @@ func (e *AudioFadeInEffect) FilterParams() map[string]string {
 
 // Dur returns the fade duration.
 func (e *AudioFadeInEffect) Dur() time.Duration { return e.duration }
+
+// DurationFactor implements Effect. Audio fade-in does not change duration.
+func (e *AudioFadeInEffect) DurationFactor() float64 { return 1.0 }
 
 // AudioFadeOutEffect fades audio to silence.
 type AudioFadeOutEffect struct {
@@ -226,6 +249,9 @@ func (e *AudioFadeOutEffect) FilterParams() map[string]string {
 // Dur returns the fade duration.
 func (e *AudioFadeOutEffect) Dur() time.Duration { return e.duration }
 
+// DurationFactor implements Effect. Audio fade-out does not change duration.
+func (e *AudioFadeOutEffect) DurationFactor() float64 { return 1.0 }
+
 // VolumeEffect adjusts the audio volume level.
 type VolumeEffect struct {
 	level float64
@@ -255,6 +281,9 @@ func (e *VolumeEffect) FilterParams() map[string]string {
 
 // Level returns the volume multiplier.
 func (e *VolumeEffect) Level() float64 { return e.level }
+
+// DurationFactor implements Effect. Volume does not change duration.
+func (e *VolumeEffect) DurationFactor() float64 { return 1.0 }
 
 // NormalizeEffect normalizes audio levels using FFmpeg's loudnorm filter.
 type NormalizeEffect struct {
@@ -290,6 +319,9 @@ func (e *NormalizeEffect) FilterParams() map[string]string {
 // TargetLUFS returns the target loudness level.
 func (e *NormalizeEffect) TargetLUFS() float64 { return e.targetLUFS }
 
+// DurationFactor implements Effect. Normalization does not change duration.
+func (e *NormalizeEffect) DurationFactor() float64 { return 1.0 }
+
 // --- Audio Speed ---
 
 // AudioSpeedEffect changes the audio playback speed (and pitch) using atempo.
@@ -321,6 +353,15 @@ func (e *AudioSpeedEffect) FilterParams() map[string]string {
 
 // Factor returns the speed multiplier.
 func (e *AudioSpeedEffect) Factor() float64 { return e.factor }
+
+// DurationFactor implements Effect. Audio speed changes duration inversely:
+// 1.5x speed shortens duration, 0.5x speed doubles it.
+func (e *AudioSpeedEffect) DurationFactor() float64 {
+	if e.factor == 0 {
+		return 1.0
+	}
+	return 1.0 / e.factor
+}
 
 // --- Helpers ---
 

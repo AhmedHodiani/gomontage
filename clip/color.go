@@ -69,6 +69,6 @@ func (c *ColorClip) WithFadeOut(d time.Duration) *ColorClip {
 //	    WithEffect(effects.FadeIn(1 * time.Second))
 func (c *ColorClip) WithEffect(e effects.Effect) *ColorClip {
 	n := &ColorClip{Base: *c.base(), Color: c.Color}
-	n.effects = append(n.effects, e)
+	n.applyEffect(e)
 	return n
 }
