@@ -1,6 +1,10 @@
 package clip
 
-import "time"
+import (
+	"time"
+
+	"github.com/ahmedhodiani/gomontage/effects"
+)
 
 // ImageClip represents a static image used as a video clip.
 // Images have infinite natural duration, so you must set a duration
@@ -63,5 +67,19 @@ func (c *ImageClip) WithFadeIn(d time.Duration) *ImageClip {
 func (c *ImageClip) WithFadeOut(d time.Duration) *ImageClip {
 	n := &ImageClip{Base: *c.base()}
 	n.fadeOut = d
+	return n
+}
+
+// WithEffect returns a new ImageClip with the given effect appended.
+// Effects are composable — call WithEffect multiple times to stack effects.
+//
+// Example:
+//
+//	clip.NewImage("logo.png").
+//	    WithDuration(5 * time.Second).
+//	    WithEffect(effects.FadeIn(1 * time.Second))
+func (c *ImageClip) WithEffect(e effects.Effect) *ImageClip {
+	n := &ImageClip{Base: *c.base()}
+	n.effects = append(n.effects, e)
 	return n
 }

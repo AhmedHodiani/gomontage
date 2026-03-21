@@ -1,6 +1,10 @@
 package clip
 
-import "time"
+import (
+	"time"
+
+	"github.com/ahmedhodiani/gomontage/effects"
+)
 
 // TextStyle configures the visual appearance of a TextClip.
 type TextStyle struct {
@@ -109,5 +113,19 @@ func (c *TextClip) WithFadeIn(d time.Duration) *TextClip {
 func (c *TextClip) WithFadeOut(d time.Duration) *TextClip {
 	n := &TextClip{Base: *c.base(), Text: c.Text, Style: c.Style}
 	n.fadeOut = d
+	return n
+}
+
+// WithEffect returns a new TextClip with the given effect appended.
+// Effects are composable — call WithEffect multiple times to stack effects.
+//
+// Example:
+//
+//	clip.NewText("Chapter 1", clip.DefaultTextStyle()).
+//	    WithDuration(4 * time.Second).
+//	    WithEffect(effects.FadeIn(1 * time.Second))
+func (c *TextClip) WithEffect(e effects.Effect) *TextClip {
+	n := &TextClip{Base: *c.base(), Text: c.Text, Style: c.Style}
+	n.effects = append(n.effects, e)
 	return n
 }

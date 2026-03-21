@@ -3,6 +3,7 @@ package clip
 import (
 	"time"
 
+	"github.com/ahmedhodiani/gomontage/effects"
 	"github.com/ahmedhodiani/gomontage/engine"
 )
 
@@ -111,5 +112,19 @@ func (c *AudioClip) WithDuration(d time.Duration) *AudioClip {
 	n := &AudioClip{Base: *c.base()}
 	n.duration = d
 	n.trimEnd = n.trimStart + d
+	return n
+}
+
+// WithEffect returns a new AudioClip with the given effect appended.
+// Effects are composable — call WithEffect multiple times to stack effects.
+//
+// Example:
+//
+//	clip.NewAudio("music.mp3").
+//	    WithEffect(effects.Volume(0.5)).
+//	    WithEffect(effects.AudioFadeIn(2 * time.Second))
+func (c *AudioClip) WithEffect(e effects.Effect) *AudioClip {
+	n := &AudioClip{Base: *c.base()}
+	n.effects = append(n.effects, e)
 	return n
 }

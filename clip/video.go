@@ -3,6 +3,7 @@ package clip
 import (
 	"time"
 
+	"github.com/ahmedhodiani/gomontage/effects"
 	"github.com/ahmedhodiani/gomontage/engine"
 )
 
@@ -133,5 +134,19 @@ func (c *VideoClip) AudioOnly() *VideoClip {
 func (c *VideoClip) VideoOnly() *VideoClip {
 	n := &VideoClip{Base: *c.base()}
 	n.hasAudio = false
+	return n
+}
+
+// WithEffect returns a new VideoClip with the given effect appended.
+// Effects are composable — call WithEffect multiple times to stack effects.
+//
+// Example:
+//
+//	clip.NewVideo("interview.mp4").
+//	    WithEffect(effects.SpeedUp(2.0)).
+//	    WithEffect(effects.FadeIn(1 * time.Second))
+func (c *VideoClip) WithEffect(e effects.Effect) *VideoClip {
+	n := &VideoClip{Base: *c.base()}
+	n.effects = append(n.effects, e)
 	return n
 }

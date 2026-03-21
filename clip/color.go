@@ -1,6 +1,10 @@
 package clip
 
-import "time"
+import (
+	"time"
+
+	"github.com/ahmedhodiani/gomontage/effects"
+)
 
 // ColorClip represents a solid color rectangle, useful for backgrounds,
 // letterboxing, or color fills between clips.
@@ -52,5 +56,19 @@ func (c *ColorClip) WithFadeIn(d time.Duration) *ColorClip {
 func (c *ColorClip) WithFadeOut(d time.Duration) *ColorClip {
 	n := &ColorClip{Base: *c.base(), Color: c.Color}
 	n.fadeOut = d
+	return n
+}
+
+// WithEffect returns a new ColorClip with the given effect appended.
+// Effects are composable — call WithEffect multiple times to stack effects.
+//
+// Example:
+//
+//	clip.NewColor("#000000", 1920, 1080).
+//	    WithDuration(3 * time.Second).
+//	    WithEffect(effects.FadeIn(1 * time.Second))
+func (c *ColorClip) WithEffect(e effects.Effect) *ColorClip {
+	n := &ColorClip{Base: *c.base(), Color: c.Color}
+	n.effects = append(n.effects, e)
 	return n
 }

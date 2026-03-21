@@ -1,6 +1,10 @@
 package clip
 
-import "time"
+import (
+	"time"
+
+	"github.com/ahmedhodiani/gomontage/effects"
+)
 
 // Type identifies the kind of media a clip represents.
 type Type int
@@ -106,6 +110,9 @@ type Clip interface {
 	// Height returns the clip height in pixels (0 if unknown or audio-only).
 	Height() int
 
+	// Effects returns the list of composable effects applied to this clip.
+	Effects() []effects.Effect
+
 	// clone returns a deep copy of the clip's base properties.
 	// This is internal — used by transform methods to create modified copies.
 	base() *Base
@@ -128,6 +135,7 @@ type Base struct {
 	position   Position
 	width      int
 	height     int
+	effects    []effects.Effect
 }
 
 // ClipType implements Clip.
@@ -172,8 +180,19 @@ func (b *Base) Width() int { return b.width }
 // Height implements Clip.
 func (b *Base) Height() int { return b.height }
 
+// Effects implements Clip.
+func (b *Base) Effects() []effects.Effect {
+	cp := make([]effects.Effect, len(b.effects))
+	copy(cp, b.effects)
+	return cp
+}
+
 func (b *Base) base() *Base {
-	// Return a shallow copy.
-	copy := *b
-	return &copy
+	// Return a shallow copy with a fresh effects slice.
+	cp := *b
+	if b.effects != nil {
+		cp.effects = make([]effects.Effect, len(b.effects))
+		copy(cp.effects, b.effects)
+	}
+	return &cp
 }

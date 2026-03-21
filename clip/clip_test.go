@@ -3,6 +3,8 @@ package clip
 import (
 	"testing"
 	"time"
+
+	"github.com/ahmedhodiani/gomontage/effects"
 )
 
 func TestVideoClip_WithDuration(t *testing.T) {
@@ -274,5 +276,150 @@ func TestType_String(t *testing.T) {
 		if got := tt.t.String(); got != tt.want {
 			t.Errorf("Type(%d).String() = %q, want %q", int(tt.t), got, tt.want)
 		}
+	}
+}
+
+func TestVideoClip_WithEffect(t *testing.T) {
+	original := NewVideoWithDuration("test.mp4", 30*time.Second)
+
+	// Apply a single effect.
+	withSpeed := original.WithEffect(effects.SpeedUp(2.0))
+	if len(withSpeed.Effects()) != 1 {
+		t.Fatalf("expected 1 effect, got %d", len(withSpeed.Effects()))
+	}
+	if withSpeed.Effects()[0].Name() != "speed" {
+		t.Errorf("expected effect name 'speed', got %q", withSpeed.Effects()[0].Name())
+	}
+
+	// Original should be unchanged.
+	if len(original.Effects()) != 0 {
+		t.Error("WithEffect mutated original clip")
+	}
+
+	// Stack multiple effects.
+	stacked := original.
+		WithEffect(effects.FadeIn(1 * time.Second)).
+		WithEffect(effects.FadeOut(2 * time.Second)).
+		WithEffect(effects.SpeedUp(1.5))
+	if len(stacked.Effects()) != 3 {
+		t.Fatalf("expected 3 effects, got %d", len(stacked.Effects()))
+	}
+	if stacked.Effects()[0].Name() != "fade_in" {
+		t.Errorf("expected first effect 'fade_in', got %q", stacked.Effects()[0].Name())
+	}
+	if stacked.Effects()[1].Name() != "fade_out" {
+		t.Errorf("expected second effect 'fade_out', got %q", stacked.Effects()[1].Name())
+	}
+	if stacked.Effects()[2].Name() != "speed" {
+		t.Errorf("expected third effect 'speed', got %q", stacked.Effects()[2].Name())
+	}
+}
+
+func TestVideoClip_WithEffect_Chaining(t *testing.T) {
+	c := NewVideoWithDuration("test.mp4", 60*time.Second)
+
+	result := c.Trim(5*time.Second, 25*time.Second).
+		WithVolume(0.5).
+		WithEffect(effects.FadeIn(1 * time.Second)).
+		WithEffect(effects.SpeedUp(2.0))
+
+	if result.Duration() != 20*time.Second {
+		t.Errorf("expected 20s, got %v", result.Duration())
+	}
+	if result.Volume() != 0.5 {
+		t.Errorf("expected volume 0.5, got %f", result.Volume())
+	}
+	if len(result.Effects()) != 2 {
+		t.Fatalf("expected 2 effects, got %d", len(result.Effects()))
+	}
+}
+
+func TestAudioClip_WithEffect(t *testing.T) {
+	original := NewAudioWithDuration("music.mp3", 3*time.Minute)
+
+	withVol := original.WithEffect(effects.Volume(0.5))
+	if len(withVol.Effects()) != 1 {
+		t.Fatalf("expected 1 effect, got %d", len(withVol.Effects()))
+	}
+	if withVol.Effects()[0].Name() != "volume" {
+		t.Errorf("expected effect name 'volume', got %q", withVol.Effects()[0].Name())
+	}
+
+	// Original should be unchanged.
+	if len(original.Effects()) != 0 {
+		t.Error("WithEffect mutated original clip")
+	}
+
+	// Stack effects.
+	stacked := original.
+		WithEffect(effects.AudioFadeIn(2 * time.Second)).
+		WithEffect(effects.Normalize())
+	if len(stacked.Effects()) != 2 {
+		t.Fatalf("expected 2 effects, got %d", len(stacked.Effects()))
+	}
+}
+
+func TestImageClip_WithEffect(t *testing.T) {
+	original := NewImage("logo.png")
+
+	withFade := original.WithEffect(effects.FadeIn(1 * time.Second))
+	if len(withFade.Effects()) != 1 {
+		t.Fatalf("expected 1 effect, got %d", len(withFade.Effects()))
+	}
+	if withFade.Effects()[0].Name() != "fade_in" {
+		t.Errorf("expected effect name 'fade_in', got %q", withFade.Effects()[0].Name())
+	}
+
+	// Original unchanged.
+	if len(original.Effects()) != 0 {
+		t.Error("WithEffect mutated original clip")
+	}
+}
+
+func TestTextClip_WithEffect(t *testing.T) {
+	original := NewText("Title", DefaultTextStyle())
+
+	withFade := original.WithEffect(effects.FadeIn(1 * time.Second))
+	if len(withFade.Effects()) != 1 {
+		t.Fatalf("expected 1 effect, got %d", len(withFade.Effects()))
+	}
+	if withFade.Text != "Title" {
+		t.Error("text should be preserved")
+	}
+
+	// Original unchanged.
+	if len(original.Effects()) != 0 {
+		t.Error("WithEffect mutated original clip")
+	}
+}
+
+func TestColorClip_WithEffect(t *testing.T) {
+	original := NewColor("#FF0000", 1920, 1080)
+
+	withFade := original.WithEffect(effects.FadeOut(2 * time.Second))
+	if len(withFade.Effects()) != 1 {
+		t.Fatalf("expected 1 effect, got %d", len(withFade.Effects()))
+	}
+	if withFade.Color != "#FF0000" {
+		t.Error("color should be preserved")
+	}
+
+	// Original unchanged.
+	if len(original.Effects()) != 0 {
+		t.Error("WithEffect mutated original clip")
+	}
+}
+
+func TestEffects_Immutability(t *testing.T) {
+	// Verify that the returned effects slice is a copy, not the internal slice.
+	c := NewVideoWithDuration("test.mp4", 10*time.Second).
+		WithEffect(effects.FadeIn(1 * time.Second))
+
+	effs := c.Effects()
+	effs[0] = effects.SpeedUp(2.0) // Mutate the returned slice.
+
+	// Internal effects should not be affected.
+	if c.Effects()[0].Name() != "fade_in" {
+		t.Error("Effects() returned the internal slice instead of a copy")
 	}
 }
