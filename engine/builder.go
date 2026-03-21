@@ -120,8 +120,15 @@ func buildFilterComplex(g *Graph) string {
 			sb.WriteString(strings.Join(kvPairs, ":"))
 		}
 
-		// Write output labels.
-		for _, edge := range node.Outputs {
+		// Write output labels. Sort video before audio so that multi-output
+		// filters like concat (which produce video pads first, then audio pads)
+		// get their labels mapped to the correct output pads.
+		sortedOutputs := make([]*Edge, len(node.Outputs))
+		copy(sortedOutputs, node.Outputs)
+		sort.SliceStable(sortedOutputs, func(i, j int) bool {
+			return sortedOutputs[i].Stream < sortedOutputs[j].Stream // StreamVideo(0) before StreamAudio(1)
+		})
+		for _, edge := range sortedOutputs {
 			sb.WriteString(fmt.Sprintf("[%s]", edge.Label))
 		}
 

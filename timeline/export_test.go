@@ -569,6 +569,63 @@ func TestDryRun_ImageThenVideoConcat(t *testing.T) {
 	}
 }
 
+func TestDryRun_ConcatOutputPadOrder(t *testing.T) {
+	// Regression test: when concat produces both video and audio outputs (v=1, a=1)
+	// and the audio is then mixed with independent audio tracks via amix, the
+	// concat output labels must be ordered video-first so FFmpeg maps them to
+	// the correct output pads (pad 0 = video, pad 1 = audio). Previously the
+	// audio label could appear first, causing a media type mismatch error:
+	// "Media type mismatch between concat output pad 0 (video) and amix input pad 0 (audio)"
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	video := clip.NewVideoWithDuration("episode.mp4", 600*time.Second)
+	// Mix of video-only and with-audio clips — this triggers concat with a=1
+	// plus anullsrc silence placeholders for the video-only clips.
+	muted := video.Trim(10*time.Second, 15*time.Second).VideoOnly()
+	unmuted := video.Trim(20*time.Second, 28*time.Second) // has audio
+
+	vTrack := tl.AddVideoTrack("main")
+	vTrack.AddSequence(muted, unmuted)
+
+	// Independent audio track forces the concat audio output through amix.
+	aTrack := tl.AddAudioTrack("narration")
+	narration := clip.NewAudioWithDuration("voiceover.mp3", 30*time.Second)
+	aTrack.Add(narration, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// The concat filter must produce both video and audio.
+	if !strings.Contains(cmdStr, "a=1") {
+		t.Errorf("expected concat with a=1, got:\n%s", cmdStr)
+	}
+
+	// The amix filter must receive the audio output from concat, not the video.
+	if !strings.Contains(cmdStr, "amix") {
+		t.Errorf("expected amix filter, got:\n%s", cmdStr)
+	}
+
+	// Verify output label ordering: in the concat filter output, the vconcat label
+	// must appear before the aconcat label so FFmpeg maps video to pad 0.
+	concatIdx := strings.Index(cmdStr, "concat=")
+	if concatIdx < 0 {
+		t.Fatalf("concat filter not found in command")
+	}
+	afterConcat := cmdStr[concatIdx:]
+	vconcatIdx := strings.Index(afterConcat, "[vconcat")
+	aconcatIdx := strings.Index(afterConcat, "[aconcat")
+	if vconcatIdx < 0 || aconcatIdx < 0 {
+		t.Fatalf("expected both vconcat and aconcat labels, got:\n%s", afterConcat)
+	}
+	if vconcatIdx > aconcatIdx {
+		t.Errorf("concat output labels are misordered: video label must come before audio label for correct FFmpeg pad mapping, got:\n%s", afterConcat)
+	}
+}
+
 func TestDryRun_AmixNormalize(t *testing.T) {
 	// The amix filter must include normalize=0 to prevent FFmpeg from reducing
 	// each input's volume by dividing by the number of inputs.
