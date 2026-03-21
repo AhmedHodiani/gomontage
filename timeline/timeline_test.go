@@ -181,6 +181,24 @@ func TestTimeline_Validate(t *testing.T) {
 	if err := tl.Validate(); err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
+
+	// Overlapping clips on same video track should fail.
+	tl = New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track = tl.AddVideoTrack("main")
+	track.Add(clip.NewVideoWithDuration("a.mp4", 10*time.Second), At(0))
+	track.Add(clip.NewVideoWithDuration("b.mp4", 10*time.Second), At(5*time.Second)) // overlaps by 5s
+	if err := tl.Validate(); err == nil {
+		t.Error("expected validation error for overlapping clips on same track")
+	}
+
+	// Adjacent clips (no overlap) should pass.
+	tl = New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track = tl.AddVideoTrack("main")
+	track.Add(clip.NewVideoWithDuration("a.mp4", 10*time.Second), At(0))
+	track.Add(clip.NewVideoWithDuration("b.mp4", 10*time.Second), At(10*time.Second)) // exactly adjacent
+	if err := tl.Validate(); err != nil {
+		t.Errorf("expected no error for adjacent clips, got %v", err)
+	}
 }
 
 func TestFormatSeconds(t *testing.T) {

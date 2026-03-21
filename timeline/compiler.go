@@ -2,6 +2,7 @@ package timeline
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -94,6 +95,17 @@ func (c *Compiler) Compile(outputPath string, outputParams map[string]string) (*
 		}
 	}
 
+	// Phase 1b: Sort video clips by StartAt and insert gap clips so that
+	// concat produces correctly timed output. Without this, clips placed
+	// at specific absolute times via Add(clip, At(T)) would be concatenated
+	// back-to-back, ignoring the requested positions.
+	if len(videoLabels) > 1 {
+		sort.SliceStable(videoLabels, func(i, j int) bool {
+			return videoLabels[i].entry.StartAt < videoLabels[j].entry.StartAt
+		})
+	}
+	videoLabels = c.insertVideoGaps(videoLabels, cfg)
+
 	// Phase 2: Concatenate video clips (and their paired audio) if there are multiple.
 	// Audio from video clips must be concatenated in sync with the video, not mixed.
 	finalVideoLabel := ""
@@ -106,11 +118,9 @@ func (c *Compiler) Compile(outputPath string, outputParams map[string]string) (*
 	}
 
 	// Phase 2b: Apply timeline delay to the final video/audio.
-	// For a single clip, delay if its StartAt > 0.
-	// For a concatenated sequence, delay only if the first clip starts after 0
-	// (meaning the entire sequence is shifted forward on the timeline).
-	// Per-clip StartAt within a sequence is handled by concat ordering, not tpad.
-	if len(videoLabels) > 0 {
+	// After gap insertion, the only case requiring a global offset is when
+	// a single clip has StartAt > 0 (gap insertion only activates for multi-clip tracks).
+	if len(videoLabels) == 1 {
 		firstStartAt := videoLabels[0].entry.StartAt
 		if firstStartAt > 0 {
 			// Apply tpad to delay video.
@@ -517,6 +527,62 @@ func (c *Compiler) compileAudioFromVideoEntry(entry Placement) (string, error) {
 	}
 
 	return currentLabel, nil
+}
+
+// insertVideoGaps walks sorted video labels and inserts black gap clips
+// wherever there is a time gap between the end of one clip and the start of
+// the next. This ensures that the concat filter produces output where clips
+// appear at their intended absolute positions instead of back-to-back.
+//
+// A gap before the first clip (i.e. first clip's StartAt > 0) is also filled,
+// so Phase 2b's tpad is only needed for the single-clip case.
+func (c *Compiler) insertVideoGaps(labels []clipLabel, cfg Config) []clipLabel {
+	if len(labels) <= 1 {
+		return labels
+	}
+
+	var result []clipLabel
+	cursor := time.Duration(0)
+
+	for _, cl := range labels {
+		gap := cl.entry.StartAt - cursor
+		if gap > 0 {
+			gapLabel := c.compileGapClip(gap, cfg)
+			result = append(result, gapLabel)
+		}
+		result = append(result, cl)
+		cursor = cl.entry.StartAt + cl.entry.Clip.Duration()
+	}
+
+	return result
+}
+
+// compileGapClip creates a black video segment (with silence) of the given
+// duration at the timeline resolution. It is used to fill time gaps between
+// video clips so that concat-based positioning matches absolute StartAt times.
+func (c *Compiler) compileGapClip(d time.Duration, cfg Config) clipLabel {
+	colorNode := c.graph.AddFilter("color", map[string]string{
+		"c": "black",
+		"s": fmt.Sprintf("%dx%d", cfg.Width, cfg.Height),
+		"d": formatSeconds(d),
+		"r": fmt.Sprintf("%g", cfg.FPS),
+	})
+	colorLabel := c.nextLabelFor("gap", colorNode)
+
+	// Normalize pixel format to yuv420p for concat compatibility.
+	fmtNode := c.graph.AddFilter("format", map[string]string{
+		"pix_fmts": "yuv420p",
+	})
+	fmtLabel := c.nextLabelFor("gapfmt", fmtNode)
+	c.graph.Connect(colorNode, fmtNode, colorLabel, engine.StreamVideo)
+
+	return clipLabel{
+		video: fmtLabel,
+		entry: Placement{
+			StartAt: 0,
+			Clip:    clip.NewColor("black", cfg.Width, cfg.Height).WithDuration(d),
+		},
+	}
 }
 
 // concatVideoClips concatenates multiple video clip outputs using the concat filter.

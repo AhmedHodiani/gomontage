@@ -465,8 +465,10 @@ func TestDryRun_SequenceNoGap(t *testing.T) {
 }
 
 func TestDryRun_SequenceWithInitialOffset(t *testing.T) {
-	// A sequence that starts at a non-zero time (e.g., first clip at 10s) should
-	// apply tpad to the final concatenated output, not to individual clips.
+	// When multiple clips start at a non-zero time (e.g., first clip at 10s),
+	// the compiler should insert a black gap clip before the first clip instead
+	// of using tpad on the concat output. This keeps all timing within the
+	// concat filter graph.
 	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
 
 	video := clip.NewVideoWithDuration("footage.mp4", 60*time.Second)
@@ -485,17 +487,25 @@ func TestDryRun_SequenceWithInitialOffset(t *testing.T) {
 
 	cmdStr := cmd.String()
 
-	// The concat filter must be present (two clips).
+	// The concat filter must be present (gap + two clips = n=3).
 	if !strings.Contains(cmdStr, "concat") {
 		t.Errorf("expected concat filter, got:\n%s", cmdStr)
 	}
-
-	// tpad should be present (first clip starts at 10s, so the whole output is delayed).
-	if !strings.Contains(cmdStr, "tpad") {
-		t.Errorf("expected tpad for sequence starting at 10s, got:\n%s", cmdStr)
+	if !strings.Contains(cmdStr, "n=3") {
+		t.Errorf("expected concat with n=3 (gap + 2 clips), got:\n%s", cmdStr)
 	}
-	if !strings.Contains(cmdStr, "start_duration=10.000") {
-		t.Errorf("expected tpad start_duration=10.000, got:\n%s", cmdStr)
+
+	// A black color source should fill the 10s gap before the first clip.
+	if !strings.Contains(cmdStr, "color=c=black") {
+		t.Errorf("expected black color gap clip for initial 10s offset, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "d=10.000") {
+		t.Errorf("expected gap duration of 10.000s, got:\n%s", cmdStr)
+	}
+
+	// No tpad — multi-clip case uses gap insertion, not tpad.
+	if strings.Contains(cmdStr, "tpad") {
+		t.Errorf("multi-clip with initial offset should use gap insertion, not tpad, got:\n%s", cmdStr)
 	}
 }
 
@@ -623,6 +633,51 @@ func TestDryRun_ConcatOutputPadOrder(t *testing.T) {
 	}
 	if vconcatIdx > aconcatIdx {
 		t.Errorf("concat output labels are misordered: video label must come before audio label for correct FFmpeg pad mapping, got:\n%s", afterConcat)
+	}
+}
+
+func TestDryRun_NonContiguousClipsInsertGaps(t *testing.T) {
+	// Regression test for Bug #2: when clips are placed at non-contiguous
+	// absolute times via Add(clip, At(T)), the compiler must insert black gap
+	// clips so that each clip appears at its correct position in the output.
+	// Previously, all clips were concatenated back-to-back, ignoring StartAt.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	video := clip.NewVideoWithDuration("footage.mp4", 120*time.Second)
+	clipA := video.Trim(0, 5*time.Second).VideoOnly()               // 5s, placed at 0s
+	clipB := video.Trim(10*time.Second, 15*time.Second).VideoOnly() // 5s, placed at 20s (15s gap)
+	clipC := video.Trim(30*time.Second, 35*time.Second).VideoOnly() // 5s, placed at 40s (15s gap)
+
+	track := tl.AddVideoTrack("main")
+	track.Add(clipA, At(0))
+	track.Add(clipB, At(20*time.Second))
+	track.Add(clipC, At(40*time.Second))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// Should have concat with n=5: clipA + gap(15s) + clipB + gap(15s) + clipC.
+	if !strings.Contains(cmdStr, "n=5") {
+		t.Errorf("expected concat with n=5 (3 clips + 2 gaps), got:\n%s", cmdStr)
+	}
+
+	// Should have black color gaps.
+	if !strings.Contains(cmdStr, "color=c=black") {
+		t.Errorf("expected black gap clips between non-contiguous clips, got:\n%s", cmdStr)
+	}
+
+	// Each gap should be 15s.
+	if !strings.Contains(cmdStr, "d=15.000") {
+		t.Errorf("expected 15s gap durations, got:\n%s", cmdStr)
+	}
+
+	// No tpad — gaps handle all positioning.
+	if strings.Contains(cmdStr, "tpad") {
+		t.Errorf("should not have tpad when gaps handle positioning, got:\n%s", cmdStr)
 	}
 }
 

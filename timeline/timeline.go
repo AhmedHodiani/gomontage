@@ -2,6 +2,7 @@ package timeline
 
 import (
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -121,6 +122,48 @@ func (tl *Timeline) Validate() error {
 	}
 	if totalClips == 0 {
 		return fmt.Errorf("timeline has no clips")
+	}
+
+	// Check for overlapping clips on video tracks. A single video track
+	// can only show one clip at a time — overlapping placements are an error.
+	for _, track := range tl.videoTracks {
+		if err := validateNoOverlap(track.Name(), track.entries); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateNoOverlap checks that no two placements on a track overlap in time.
+// Entries are sorted by StartAt; if a clip's start is before the previous
+// clip's end, that's an overlap.
+func validateNoOverlap(trackName string, entries []Placement) error {
+	if len(entries) < 2 {
+		return nil
+	}
+
+	sorted := make([]Placement, len(entries))
+	copy(sorted, entries)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].StartAt < sorted[j].StartAt
+	})
+
+	for i := 1; i < len(sorted); i++ {
+		prevEnd := sorted[i-1].StartAt + sorted[i-1].Clip.Duration()
+		currStart := sorted[i].StartAt
+		if currStart < prevEnd {
+			overlap := prevEnd - currStart
+			return fmt.Errorf(
+				"track %q: clip at %.3fs (duration %.3fs, ends %.3fs) overlaps with clip at %.3fs by %.3fs",
+				trackName,
+				sorted[i-1].StartAt.Seconds(),
+				sorted[i-1].Clip.Duration().Seconds(),
+				prevEnd.Seconds(),
+				currStart.Seconds(),
+				overlap.Seconds(),
+			)
+		}
 	}
 
 	return nil
