@@ -199,10 +199,37 @@ func (b *Base) base() *Base {
 
 // applyEffect appends the effect and adjusts duration if the effect has a
 // duration factor other than 1.0 (e.g. speed changes).
+//
+// Only the clip's output duration is modified — trimStart and trimEnd are
+// left intact because they describe the source window for FFmpeg's trim
+// filter and must remain in source-time coordinates.
+//
+// For clips that have a video stream, duration is only adjusted by effects
+// targeting video (TargetVideo or TargetBoth), because the video stream
+// drives the timeline duration. Audio-only effects (like AudioSpeed) do not
+// change the clip duration on video clips — they only affect the audio
+// stream length.
+//
+// For audio-only clips (no video), audio-targeting effects do adjust
+// duration since the audio stream IS the timeline.
 func (b *Base) applyEffect(e effects.Effect) {
 	b.effects = append(b.effects, e)
 	if f := e.DurationFactor(); f != 1.0 && f > 0 {
-		b.duration = time.Duration(float64(b.duration) * f)
-		b.trimEnd = b.trimStart + b.duration
+		shouldAdjust := false
+		switch e.Target() {
+		case effects.TargetVideo:
+			// Video speed always adjusts duration.
+			shouldAdjust = true
+		case effects.TargetBoth:
+			// Effects targeting both streams always adjust duration.
+			shouldAdjust = true
+		case effects.TargetAudio:
+			// Audio-only effects adjust duration only on audio-only clips
+			// (clips without a video stream).
+			shouldAdjust = !b.hasVideo
+		}
+		if shouldAdjust {
+			b.duration = time.Duration(float64(b.duration) * f)
+		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ahmedhodiani/gomontage/clip"
+	"github.com/ahmedhodiani/gomontage/effects"
 	"github.com/ahmedhodiani/gomontage/engine"
 )
 
@@ -324,6 +325,18 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 		lastNode = fadeNode
 	}
 
+	// Apply composable video effects from the clip's Effects() list.
+	for _, e := range cl.Effects() {
+		if e.Target() != effects.TargetVideo && e.Target() != effects.TargetBoth {
+			continue
+		}
+		filterNode := c.graph.AddFilter(e.FilterName(), e.FilterParams())
+		filterLabel := c.nextLabelFor("vfx", filterNode)
+		c.graph.Connect(lastNode, filterNode, currentLabel, engine.StreamVideo)
+		currentLabel = filterLabel
+		lastNode = filterNode
+	}
+
 	return []clipLabel{{
 		video: currentLabel,
 		entry: entry,
@@ -472,6 +485,14 @@ func (c *Compiler) compileAudioEntry(entry Placement) (string, error) {
 		lastNode = fadeNode
 	}
 
+	// Apply composable audio effects from the clip's Effects() list.
+	for _, e := range cl.Effects() {
+		if e.Target() != effects.TargetAudio && e.Target() != effects.TargetBoth {
+			continue
+		}
+		currentLabel, lastNode = c.compileAudioEffect(e, currentLabel, lastNode, "afx")
+	}
+
 	// Apply delay if the clip doesn't start at 0.
 	if entry.StartAt > 0 {
 		delayNode := c.graph.AddFilter("adelay", map[string]string{
@@ -524,6 +545,14 @@ func (c *Compiler) compileAudioFromVideoEntry(entry Placement) (string, error) {
 		c.graph.Connect(lastNode, volNode, currentLabel, engine.StreamAudio)
 		currentLabel = volLabel
 		lastNode = volNode
+	}
+
+	// Apply composable audio effects from the clip's Effects() list.
+	for _, e := range cl.Effects() {
+		if e.Target() != effects.TargetAudio && e.Target() != effects.TargetBoth {
+			continue
+		}
+		currentLabel, lastNode = c.compileAudioEffect(e, currentLabel, lastNode, "vafx")
 	}
 
 	return currentLabel, nil
@@ -694,6 +723,108 @@ func (c *Compiler) findFilterByLabel(label string) *engine.Node {
 	}
 
 	return nil
+}
+
+// compileAudioEffect emits the filter nodes for a single audio effect.
+// Most effects produce a single filter node, but atempo needs special
+// handling: FFmpeg's atempo filter only accepts factors in [0.5, 2.0],
+// so higher or lower factors must be decomposed into a chain.
+//
+// Returns the updated (currentLabel, lastNode) after the effect chain.
+func (c *Compiler) compileAudioEffect(e effects.Effect, currentLabel string, lastNode *engine.Node, labelPrefix string) (string, *engine.Node) {
+	if e.FilterName() == "atempo" {
+		return c.compileAtempoChain(e, currentLabel, lastNode, labelPrefix)
+	}
+	filterNode := c.graph.AddFilter(e.FilterName(), e.FilterParams())
+	filterLabel := c.nextLabelFor(labelPrefix, filterNode)
+	c.graph.Connect(lastNode, filterNode, currentLabel, engine.StreamAudio)
+	return filterLabel, filterNode
+}
+
+// compileAtempoChain decomposes an atempo effect into a chain of atempo
+// filters, each with a factor within FFmpeg's supported range of [0.5, 2.0].
+//
+// For example, a 4x speedup becomes: atempo=2.0 -> atempo=2.0
+// A 6x speedup becomes: atempo=2.0 -> atempo=2.0 -> atempo=1.5
+// A 0.25x slowdown becomes: atempo=0.5 -> atempo=0.5
+func (c *Compiler) compileAtempoChain(e effects.Effect, currentLabel string, lastNode *engine.Node, labelPrefix string) (string, *engine.Node) {
+	params := e.FilterParams()
+	// Parse the tempo value from the params. The AudioSpeedEffect stores it
+	// as "tempo" key. If we can't find it, fall back to single filter.
+	tempoStr, ok := params["tempo"]
+	if !ok {
+		// Not a standard atempo effect — emit as-is.
+		filterNode := c.graph.AddFilter(e.FilterName(), e.FilterParams())
+		filterLabel := c.nextLabelFor(labelPrefix, filterNode)
+		c.graph.Connect(lastNode, filterNode, currentLabel, engine.StreamAudio)
+		return filterLabel, filterNode
+	}
+
+	var factor float64
+	if _, err := fmt.Sscanf(tempoStr, "%f", &factor); err != nil || factor <= 0 {
+		// Can't parse — emit as-is.
+		filterNode := c.graph.AddFilter(e.FilterName(), e.FilterParams())
+		filterLabel := c.nextLabelFor(labelPrefix, filterNode)
+		c.graph.Connect(lastNode, filterNode, currentLabel, engine.StreamAudio)
+		return filterLabel, filterNode
+	}
+
+	// Decompose into chain of atempo filters each within [0.5, 2.0].
+	factors := decomposeAtempo(factor)
+	for _, f := range factors {
+		node := c.graph.AddFilter("atempo", map[string]string{
+			"tempo": formatFloat(f),
+		})
+		label := c.nextLabelFor(labelPrefix, node)
+		c.graph.Connect(lastNode, node, currentLabel, engine.StreamAudio)
+		currentLabel = label
+		lastNode = node
+	}
+
+	return currentLabel, lastNode
+}
+
+// decomposeAtempo breaks a tempo factor into a slice of factors each within
+// FFmpeg's atempo range of [0.5, 2.0].
+func decomposeAtempo(factor float64) []float64 {
+	if factor >= 0.5 && factor <= 2.0 {
+		return []float64{factor}
+	}
+
+	var factors []float64
+	remaining := factor
+
+	if remaining > 2.0 {
+		for remaining > 2.0 {
+			factors = append(factors, 2.0)
+			remaining /= 2.0
+		}
+		if remaining > 1.0001 || remaining < 0.9999 { // avoid no-op 1.0
+			factors = append(factors, remaining)
+		}
+	} else {
+		// remaining < 0.5
+		for remaining < 0.5 {
+			factors = append(factors, 0.5)
+			remaining /= 0.5
+		}
+		if remaining > 1.0001 || remaining < 0.9999 {
+			factors = append(factors, remaining)
+		}
+	}
+
+	return factors
+}
+
+// formatFloat formats a float64 for FFmpeg filter parameters, trimming
+// trailing zeros for readability.
+func formatFloat(f float64) string {
+	s := fmt.Sprintf("%.6f", f)
+	if strings.Contains(s, ".") {
+		s = strings.TrimRight(s, "0")
+		s = strings.TrimRight(s, ".")
+	}
+	return s
 }
 
 // formatSeconds converts a Duration to a decimal seconds string for FFmpeg.

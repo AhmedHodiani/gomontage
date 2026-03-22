@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ahmedhodiani/gomontage/clip"
+	"github.com/ahmedhodiani/gomontage/effects"
 	"github.com/ahmedhodiani/gomontage/export"
 )
 
@@ -709,5 +710,247 @@ func TestDryRun_AmixNormalize(t *testing.T) {
 	// normalize=0 must be present to preserve volume levels.
 	if !strings.Contains(cmdStr, "normalize=0") {
 		t.Errorf("expected normalize=0 in amix filter to prevent volume reduction, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_WithEffect_SpeedUp(t *testing.T) {
+	// A video clip with SpeedUp(2.0) must produce a setpts filter in the command.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+
+	video := clip.NewVideoWithDuration("footage.mp4", 30*time.Second).
+		WithEffect(effects.SpeedUp(2.0))
+	track.Add(video, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// The setpts filter must be present for speed change.
+	if !strings.Contains(cmdStr, "setpts") {
+		t.Errorf("expected setpts filter for SpeedUp effect, got:\n%s", cmdStr)
+	}
+	// The PTS expression for 2x speed is 0.5*PTS.
+	if !strings.Contains(cmdStr, "0.5*PTS") {
+		t.Errorf("expected 0.5*PTS expression for SpeedUp(2.0), got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_WithEffect_AudioSpeed(t *testing.T) {
+	// An audio clip with AudioSpeed must produce an atempo filter.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	vTrack := tl.AddVideoTrack("main")
+	vTrack.Add(clip.NewVideoWithDuration("video.mp4", 10*time.Second).VideoOnly(), At(0))
+
+	aTrack := tl.AddAudioTrack("music")
+	audio := clip.NewAudioWithDuration("music.mp3", 10*time.Second).
+		WithEffect(effects.AudioSpeed(1.5))
+	aTrack.Add(audio, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	if !strings.Contains(cmdStr, "atempo") {
+		t.Errorf("expected atempo filter for AudioSpeed effect, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_WithEffect_VideoSpeedAndAudioSpeed(t *testing.T) {
+	// A video clip with both SpeedUp and AudioSpeed effects should produce
+	// setpts in the video chain and atempo in the audio chain.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+
+	video := clip.NewVideoWithDuration("footage.mp4", 30*time.Second).
+		WithEffect(effects.SpeedUp(2.0)).
+		WithEffect(effects.AudioSpeed(2.0))
+	track.Add(video, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	if !strings.Contains(cmdStr, "setpts") {
+		t.Errorf("expected setpts filter for video speed, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "atempo") {
+		t.Errorf("expected atempo filter for audio speed, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_WithEffect_Normalize(t *testing.T) {
+	// An audio clip with Normalize must produce a loudnorm filter.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	vTrack := tl.AddVideoTrack("main")
+	vTrack.Add(clip.NewVideoWithDuration("video.mp4", 10*time.Second).VideoOnly(), At(0))
+
+	aTrack := tl.AddAudioTrack("voice")
+	audio := clip.NewAudioWithDuration("narration.wav", 10*time.Second).
+		WithEffect(effects.Normalize())
+	aTrack.Add(audio, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	if !strings.Contains(cmdStr, "loudnorm") {
+		t.Errorf("expected loudnorm filter for Normalize effect, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_WithEffect_NoEffects(t *testing.T) {
+	// A clip without effects should not produce any effect-related filters
+	// (beyond the standard trim/scale/fade handling).
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+	track.Add(clip.NewVideoWithDuration("input.mp4", 10*time.Second), At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// Should not have speed or atempo filters.
+	if strings.Contains(cmdStr, "setpts") {
+		t.Errorf("clip with no effects should not have setpts, got:\n%s", cmdStr)
+	}
+	if strings.Contains(cmdStr, "atempo") {
+		t.Errorf("clip with no effects should not have atempo, got:\n%s", cmdStr)
+	}
+	if strings.Contains(cmdStr, "loudnorm") {
+		t.Errorf("clip with no effects should not have loudnorm, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_TrimThenSpeedUp(t *testing.T) {
+	// Regression test: Trim(0, 10s) then SpeedUp(2.0) must produce a trim
+	// filter with the original source window (0-10s), NOT the speed-adjusted
+	// window (0-5s). The speed is applied by setpts AFTER the trim.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+
+	video := clip.NewVideoWithDuration("long.mp4", 60*time.Second).
+		Trim(0, 10*time.Second).
+		WithEffect(effects.SpeedUp(2.0)).
+		WithEffect(effects.AudioSpeed(2.0))
+	track.Add(video, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// The trim filter must cut to 10s (the source window), not 5s.
+	if !strings.Contains(cmdStr, "end=10.000") {
+		t.Errorf("expected trim end=10.000 (source window), got:\n%s", cmdStr)
+	}
+
+	// The setpts filter must be present for video speed.
+	if !strings.Contains(cmdStr, "setpts") {
+		t.Errorf("expected setpts for speed effect after trim, got:\n%s", cmdStr)
+	}
+
+	// The atempo filter must be present for audio speed.
+	if !strings.Contains(cmdStr, "atempo") {
+		t.Errorf("expected atempo for audio speed after trim, got:\n%s", cmdStr)
+	}
+
+	// The audio trim must also use the original 10s window.
+	if !strings.Contains(cmdStr, "atrim") {
+		t.Errorf("expected atrim for audio from trimmed video, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_HighSpeedAtempoChain(t *testing.T) {
+	// AudioSpeed(8.0) exceeds atempo's per-filter limit of 2.0. The compiler
+	// must chain multiple atempo filters: 2.0 * 2.0 * 2.0 = 8.0.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+
+	video := clip.NewVideoWithDuration("footage.mp4", 30*time.Second).
+		WithEffect(effects.SpeedUp(8.0)).
+		WithEffect(effects.AudioSpeed(8.0))
+	track.Add(video, At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// Should have multiple atempo filters chained, not a single atempo=8.
+	atempoCount := strings.Count(cmdStr, "atempo")
+	if atempoCount < 3 {
+		t.Errorf("expected at least 3 chained atempo filters for 8x speed, got %d in:\n%s", atempoCount, cmdStr)
+	}
+
+	// Should NOT contain atempo=tempo=8 (that would be an unsupported single filter).
+	if strings.Contains(cmdStr, "tempo=8") {
+		t.Errorf("should not have a single atempo with tempo=8, got:\n%s", cmdStr)
+	}
+}
+
+func TestDecomposeAtempo(t *testing.T) {
+	tests := []struct {
+		name   string
+		factor float64
+		// minLen is the minimum number of atempo filters expected.
+		minLen int
+		// product checks that the factors multiply back to the original.
+	}{
+		{"1x (passthrough)", 1.0, 1},
+		{"1.5x (in range)", 1.5, 1},
+		{"2.0x (boundary)", 2.0, 1},
+		{"0.5x (boundary)", 0.5, 1},
+		{"4x (needs chain)", 4.0, 2},
+		{"8x (needs chain)", 8.0, 3},
+		{"15x (needs chain)", 15.0, 4},
+		{"0.25x (slow, needs chain)", 0.25, 2},
+		{"0.1x (very slow)", 0.1, 4},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			factors := decomposeAtempo(tc.factor)
+
+			if len(factors) < tc.minLen {
+				t.Errorf("expected at least %d factors, got %d: %v", tc.minLen, len(factors), factors)
+			}
+
+			// Every factor must be within [0.5, 2.0].
+			for _, f := range factors {
+				if f < 0.4999 || f > 2.0001 {
+					t.Errorf("factor %.6f is outside [0.5, 2.0] range", f)
+				}
+			}
+
+			// Product must equal the original factor (within tolerance).
+			product := 1.0
+			for _, f := range factors {
+				product *= f
+			}
+			if diff := product - tc.factor; diff > 0.001 || diff < -0.001 {
+				t.Errorf("product of factors %.6f != original %.6f (diff=%.6f), factors=%v",
+					product, tc.factor, diff, factors)
+			}
+		})
 	}
 }

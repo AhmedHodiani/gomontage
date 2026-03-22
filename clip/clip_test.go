@@ -475,3 +475,42 @@ func TestWithEffect_DurationOriginalUnchanged(t *testing.T) {
 		t.Errorf("original duration changed: expected 60s, got %v", original.Duration())
 	}
 }
+
+func TestWithEffect_AudioSpeedDoesNotChangeVideoClipDuration(t *testing.T) {
+	// On a video clip, AudioSpeed should NOT change the clip duration.
+	// The video stream drives the timeline; audio speed only affects audio.
+	v := NewVideoWithDuration("test.mp4", 60*time.Second).
+		WithEffect(effects.AudioSpeed(2.0))
+	if v.Duration() != 60*time.Second {
+		t.Errorf("AudioSpeed on video clip changed duration: expected 60s, got %v", v.Duration())
+	}
+
+	// SpeedUp + AudioSpeed on video clip: only SpeedUp affects duration.
+	v2 := NewVideoWithDuration("test.mp4", 60*time.Second).
+		WithEffect(effects.SpeedUp(3.0)).
+		WithEffect(effects.AudioSpeed(3.0))
+	if v2.Duration() != 20*time.Second {
+		t.Errorf("SpeedUp(3)+AudioSpeed(3) on 60s video: expected 20s, got %v", v2.Duration())
+	}
+}
+
+func TestWithEffect_TrimThenSpeedPreservesTrimWindow(t *testing.T) {
+	// Trim(10s, 20s) then SpeedUp(2): output duration should be 5s,
+	// but the source trim window must remain 10s-20s for the FFmpeg filter.
+	v := NewVideoWithDuration("test.mp4", 60*time.Second).
+		Trim(10*time.Second, 20*time.Second).
+		WithEffect(effects.SpeedUp(2.0))
+
+	if v.Duration() != 5*time.Second {
+		t.Errorf("Trim+SpeedUp duration: expected 5s, got %v", v.Duration())
+	}
+	if v.TrimStart() != 10*time.Second {
+		t.Errorf("TrimStart after speed: expected 10s, got %v", v.TrimStart())
+	}
+	if v.TrimEnd() != 20*time.Second {
+		t.Errorf("TrimEnd after speed: expected 20s, got %v (should be source time, not output time)", v.TrimEnd())
+	}
+	if !v.IsTrimmed() {
+		t.Error("IsTrimmed should be true")
+	}
+}
