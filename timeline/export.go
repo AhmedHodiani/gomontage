@@ -153,6 +153,33 @@ func (tl *Timeline) DryRun(profile *export.Profile, outputPath string) (*engine.
 	return cmd, nil
 }
 
+// ExportRange exports only the portion of the timeline between start and end.
+// Clips outside the range are excluded, partially overlapping clips are trimmed,
+// and the output starts at t=0. This is useful for quickly previewing a section
+// of a complex timeline without rendering the entire project.
+//
+// Example:
+//
+//	// Export only minutes 5-7 of a long timeline.
+//	err := tl.ExportRange(5*time.Minute, 7*time.Minute, export.YouTube1080p(), "preview.mp4")
+func (tl *Timeline) ExportRange(start, end time.Duration, profile *export.Profile, outputPath string) error {
+	sub := tl.SubRange(start, end)
+	return sub.Export(profile, outputPath)
+}
+
+// ExportRangeSilent is like ExportRange but produces no output.
+func (tl *Timeline) ExportRangeSilent(start, end time.Duration, profile *export.Profile, outputPath string) error {
+	sub := tl.SubRange(start, end)
+	return sub.ExportSilent(profile, outputPath)
+}
+
+// DryRunRange is like DryRun but only includes the portion of the timeline
+// between start and end.
+func (tl *Timeline) DryRunRange(start, end time.Duration, profile *export.Profile, outputPath string) (*engine.Command, error) {
+	sub := tl.SubRange(start, end)
+	return sub.DryRun(profile, outputPath)
+}
+
 // printTimelineSummary prints a one-line summary of the timeline to stderr.
 func printTimelineSummary(tl *Timeline) {
 	cfg := tl.Config()
