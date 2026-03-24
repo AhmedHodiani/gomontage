@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ahmedhodiani/gomontage/clip"
+	"github.com/ahmedhodiani/gomontage/effects"
 	"github.com/ahmedhodiani/gomontage/export"
 )
 
@@ -570,5 +571,395 @@ func TestSubRange_RangeEntirelyInGap(t *testing.T) {
 	entries := sub.VideoTracks()[0].Entries()
 	if len(entries) != 0 {
 		t.Errorf("expected 0 entries for range entirely in gap, got %d", len(entries))
+	}
+}
+
+// --- Timeline-level edge case tests ---
+
+func TestSubRange_MultiTrackDifferentFiltering(t *testing.T) {
+	// Two video tracks with clips at different positions.
+	// Track 1: clip at 0-10s (excluded by range).
+	// Track 2: clip at 20-30s (included).
+	// Range: 15-30s.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track1 := tl.AddVideoTrack("background")
+	track2 := tl.AddVideoTrack("overlay")
+
+	track1.Add(clip.NewVideoWithDuration("bg.mp4", 10*time.Second), At(0))
+	track2.Add(clip.NewVideoWithDuration("overlay.mp4", 10*time.Second), At(20*time.Second))
+
+	sub := tl.SubRange(15*time.Second, 30*time.Second)
+
+	// Track 1 should have 0 entries (clip excluded).
+	if len(sub.VideoTracks()[0].Entries()) != 0 {
+		t.Errorf("track1: expected 0 entries, got %d", len(sub.VideoTracks()[0].Entries()))
+	}
+	// Track 2 should have 1 entry (clip included and shifted).
+	entries2 := sub.VideoTracks()[1].Entries()
+	if len(entries2) != 1 {
+		t.Fatalf("track2: expected 1 entry, got %d", len(entries2))
+	}
+	if entries2[0].StartAt != 5*time.Second {
+		t.Errorf("track2: expected StartAt 5s (20-15), got %v", entries2[0].StartAt)
+	}
+	if entries2[0].Clip.Duration() != 10*time.Second {
+		t.Errorf("track2: expected full 10s duration, got %v", entries2[0].Clip.Duration())
+	}
+}
+
+func TestSubRange_MultiTrackPartialTrimming(t *testing.T) {
+	// Track 1: clip at 0-20s (partially trimmed).
+	// Track 2: clip at 10-30s (partially trimmed differently).
+	// Range: 5-25s.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track1 := tl.AddVideoTrack("bg")
+	track2 := tl.AddVideoTrack("fg")
+
+	track1.Add(clip.NewVideoWithDuration("bg.mp4", 20*time.Second), At(0))
+	track2.Add(clip.NewVideoWithDuration("fg.mp4", 20*time.Second), At(10*time.Second))
+
+	sub := tl.SubRange(5*time.Second, 25*time.Second)
+
+	// Track 1: clip 0-20s, visible 5-20s → 15s, starts at 0.
+	entries1 := sub.VideoTracks()[0].Entries()
+	if len(entries1) != 1 {
+		t.Fatalf("track1: expected 1 entry, got %d", len(entries1))
+	}
+	if entries1[0].Clip.Duration() != 15*time.Second {
+		t.Errorf("track1: expected duration 15s, got %v", entries1[0].Clip.Duration())
+	}
+	if entries1[0].StartAt != 0 {
+		t.Errorf("track1: expected StartAt 0, got %v", entries1[0].StartAt)
+	}
+
+	// Track 2: clip 10-30s, visible 10-25s → 15s, starts at 5s.
+	entries2 := sub.VideoTracks()[1].Entries()
+	if len(entries2) != 1 {
+		t.Fatalf("track2: expected 1 entry, got %d", len(entries2))
+	}
+	if entries2[0].Clip.Duration() != 15*time.Second {
+		t.Errorf("track2: expected duration 15s, got %v", entries2[0].Clip.Duration())
+	}
+	if entries2[0].StartAt != 5*time.Second {
+		t.Errorf("track2: expected StartAt 5s, got %v", entries2[0].StartAt)
+	}
+}
+
+func TestSubRange_OverlappingAudioClips(t *testing.T) {
+	// Audio tracks allow overlapping clips. Two overlapping audio clips:
+	// music: 0-30s, narration: 10-40s.
+	// Range: 5-35s → both trimmed independently.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	vTrack := tl.AddVideoTrack("main")
+	vTrack.Add(clip.NewVideoWithDuration("video.mp4", 40*time.Second).VideoOnly(), At(0))
+
+	aTrack := tl.AddAudioTrack("mixed")
+	aTrack.Add(clip.NewAudioWithDuration("music.mp3", 30*time.Second), At(0))
+	aTrack.Add(clip.NewAudioWithDuration("narration.wav", 30*time.Second), At(10*time.Second))
+
+	sub := tl.SubRange(5*time.Second, 35*time.Second)
+	audioEntries := sub.AudioTracks()[0].Entries()
+	if len(audioEntries) != 2 {
+		t.Fatalf("expected 2 overlapping audio entries, got %d", len(audioEntries))
+	}
+
+	// music: 0-30s, visible 5-30s → 25s, starts at 0.
+	if audioEntries[0].Clip.Duration() != 25*time.Second {
+		t.Errorf("music: expected 25s, got %v", audioEntries[0].Clip.Duration())
+	}
+	if audioEntries[0].StartAt != 0 {
+		t.Errorf("music: expected StartAt 0, got %v", audioEntries[0].StartAt)
+	}
+
+	// narration: 10-40s, visible 10-35s → 25s, starts at 5s.
+	if audioEntries[1].Clip.Duration() != 25*time.Second {
+		t.Errorf("narration: expected 25s, got %v", audioEntries[1].Clip.Duration())
+	}
+	if audioEntries[1].StartAt != 5*time.Second {
+		t.Errorf("narration: expected StartAt 5s, got %v", audioEntries[1].StartAt)
+	}
+}
+
+func TestSubRange_NonZeroPlacementTrimAndShift(t *testing.T) {
+	// A clip placed at 15s (timeline range 15-25s for a 10s clip).
+	// SubRange(10s, 20s): range overlaps the clip from 15-20s.
+	// Visible clip-local window: 0-5s.
+	// Shifted StartAt: 15-10 = 5s.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+	track.Add(clip.NewVideoWithDuration("clip.mp4", 10*time.Second), At(15*time.Second))
+
+	sub := tl.SubRange(10*time.Second, 20*time.Second)
+	entries := sub.VideoTracks()[0].Entries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	// Clip trimmed to first 5s (0-5s clip-local).
+	if entries[0].Clip.Duration() != 5*time.Second {
+		t.Errorf("expected duration 5s, got %v", entries[0].Clip.Duration())
+	}
+	// Shifted from 15s to 5s (15 - 10 = 5).
+	if entries[0].StartAt != 5*time.Second {
+		t.Errorf("expected StartAt 5s, got %v", entries[0].StartAt)
+	}
+	// Source trim: first 5s of the clip.
+	if entries[0].Clip.TrimStart() != 0 {
+		t.Errorf("expected TrimStart 0, got %v", entries[0].Clip.TrimStart())
+	}
+	if entries[0].Clip.TrimEnd() != 5*time.Second {
+		t.Errorf("expected TrimEnd 5s, got %v", entries[0].Clip.TrimEnd())
+	}
+}
+
+func TestSubRange_TextClipInTimeline(t *testing.T) {
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+
+	txt := clip.NewText("Chapter 1", clip.DefaultTextStyle()).WithDuration(10 * time.Second)
+	track.Add(txt, At(5*time.Second))
+
+	// Range 8-13s: text clip at 5-15s, visible 8-13s → 5s, clip-local 3-8s, starts at 0.
+	sub := tl.SubRange(8*time.Second, 13*time.Second)
+	entries := sub.VideoTracks()[0].Entries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].Clip.Duration() != 5*time.Second {
+		t.Errorf("expected duration 5s, got %v", entries[0].Clip.Duration())
+	}
+	if entries[0].StartAt != 0 {
+		t.Errorf("expected StartAt 0, got %v", entries[0].StartAt)
+	}
+	// Verify it's still a TextClip with correct content.
+	tc, ok := entries[0].Clip.(*clip.TextClip)
+	if !ok {
+		t.Fatal("expected *TextClip")
+	}
+	if tc.Text != "Chapter 1" {
+		t.Errorf("expected text 'Chapter 1', got %q", tc.Text)
+	}
+}
+
+func TestSubRange_EffectsPreservedInTimeline(t *testing.T) {
+	// Clip with SpeedUp and FadeIn effects should preserve them through timeline SubRange.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+
+	v := clip.NewVideoWithDuration("footage.mp4", 30*time.Second).
+		WithEffect(effects.SpeedUp(2.0)).
+		WithEffect(effects.FadeIn(1 * time.Second))
+	track.Add(v, At(0))
+
+	sub := tl.SubRange(0, 10*time.Second)
+	entries := sub.VideoTracks()[0].Entries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	effs := entries[0].Clip.Effects()
+	if len(effs) != 2 {
+		t.Fatalf("expected 2 effects preserved through timeline SubRange, got %d", len(effs))
+	}
+	if effs[0].Name() != "speed" {
+		t.Errorf("expected first effect 'speed', got %q", effs[0].Name())
+	}
+	if effs[1].Name() != "fade_in" {
+		t.Errorf("expected second effect 'fade_in', got %q", effs[1].Name())
+	}
+}
+
+func TestDryRunRange_EmptyResult(t *testing.T) {
+	// Range entirely in a gap → all clips excluded.
+	// DryRun should fail with a validation error (no clips).
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+	track.Add(clip.NewVideoWithDuration("a.mp4", 10*time.Second), At(0))
+	track.Add(clip.NewVideoWithDuration("b.mp4", 10*time.Second), At(20*time.Second))
+
+	_, err := tl.DryRunRange(12*time.Second, 18*time.Second, export.YouTube1080p(), "output.mp4")
+	if err == nil {
+		t.Error("expected error for DryRunRange with empty result (no clips)")
+	}
+	if err != nil && !strings.Contains(err.Error(), "compilation failed") {
+		t.Errorf("expected compilation failed error, got: %v", err)
+	}
+}
+
+func TestSubRange_Sequential(t *testing.T) {
+	// SubRange of a SubRange: progressive narrowing.
+	// 60s clip at 0s. First SubRange(10, 50) → 40s sub.
+	// Second SubRange(5, 30) → 25s sub-sub (original source 15-40s).
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+	track.Add(clip.NewVideoWithDuration("footage.mp4", 60*time.Second), At(0))
+
+	sub1 := tl.SubRange(10*time.Second, 50*time.Second) // 40s timeline, clip source 10-50s
+	if sub1.Duration() != 40*time.Second {
+		t.Fatalf("sub1: expected 40s duration, got %v", sub1.Duration())
+	}
+
+	sub2 := sub1.SubRange(5*time.Second, 30*time.Second) // 25s timeline
+	if sub2.Duration() != 25*time.Second {
+		t.Fatalf("sub2: expected 25s duration, got %v", sub2.Duration())
+	}
+
+	entries := sub2.VideoTracks()[0].Entries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].StartAt != 0 {
+		t.Errorf("expected StartAt 0, got %v", entries[0].StartAt)
+	}
+	if entries[0].Clip.Duration() != 25*time.Second {
+		t.Errorf("expected duration 25s, got %v", entries[0].Clip.Duration())
+	}
+	// Source coordinates: first SubRange → source 10-50s, clip-local 0-40s.
+	// Second SubRange(5, 30) on that clip → source 10 + 5 = 15s, 10 + 30 = 40s.
+	if entries[0].Clip.TrimStart() != 15*time.Second {
+		t.Errorf("expected TrimStart 15s (double sub-range), got %v", entries[0].Clip.TrimStart())
+	}
+	if entries[0].Clip.TrimEnd() != 40*time.Second {
+		t.Errorf("expected TrimEnd 40s (double sub-range), got %v", entries[0].Clip.TrimEnd())
+	}
+}
+
+func TestSubRange_SequentialWithDryRun(t *testing.T) {
+	// Verify the double SubRange produces a valid FFmpeg command.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+	track.Add(clip.NewVideoWithDuration("footage.mp4", 60*time.Second), At(0))
+
+	sub := tl.SubRange(10*time.Second, 50*time.Second).SubRange(5*time.Second, 30*time.Second)
+
+	cmd, err := sub.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun on double SubRange returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+	if !strings.Contains(cmdStr, "footage.mp4") {
+		t.Errorf("expected footage.mp4, got:\n%s", cmdStr)
+	}
+	// Should have trim filter with source coordinates 15-40.
+	if !strings.Contains(cmdStr, "start=15.000") {
+		t.Errorf("expected trim start=15.000, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "end=40.000") {
+		t.Errorf("expected trim end=40.000, got:\n%s", cmdStr)
+	}
+}
+
+func TestSubRange_PreTrimmedClipAtNonZeroPosition(t *testing.T) {
+	// Clip trimmed to source 20-40s (20s local), placed at timeline 10s.
+	// Timeline range: 10-30s → clip occupies 10-30s, fully visible.
+	// SubRange(15, 25): clip visible 15-25s, clip-local 5-15s.
+	// Source: 20 + 5 = 25s, 20 + 15 = 35s.
+	// Shifted StartAt: max(10-15, 0) = 0.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+	v := clip.NewVideoWithDuration("source.mp4", 60*time.Second).
+		Trim(20*time.Second, 40*time.Second)
+	track.Add(v, At(10*time.Second))
+
+	sub := tl.SubRange(15*time.Second, 25*time.Second)
+	entries := sub.VideoTracks()[0].Entries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].StartAt != 0 {
+		t.Errorf("expected StartAt 0, got %v", entries[0].StartAt)
+	}
+	if entries[0].Clip.Duration() != 10*time.Second {
+		t.Errorf("expected duration 10s, got %v", entries[0].Clip.Duration())
+	}
+	if entries[0].Clip.TrimStart() != 25*time.Second {
+		t.Errorf("expected TrimStart 25s (source), got %v", entries[0].Clip.TrimStart())
+	}
+	if entries[0].Clip.TrimEnd() != 35*time.Second {
+		t.Errorf("expected TrimEnd 35s (source), got %v", entries[0].Clip.TrimEnd())
+	}
+}
+
+func TestDryRunRange_PreTrimmedAtNonZero(t *testing.T) {
+	// Verify the FFmpeg command for pre-trimmed clip at non-zero position.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+	v := clip.NewVideoWithDuration("source.mp4", 60*time.Second).
+		Trim(20*time.Second, 40*time.Second)
+	track.Add(v, At(10*time.Second))
+
+	cmd, err := tl.DryRunRange(15*time.Second, 25*time.Second, export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRunRange returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+	if !strings.Contains(cmdStr, "start=25.000") {
+		t.Errorf("expected trim start=25.000, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "end=35.000") {
+		t.Errorf("expected trim end=35.000, got:\n%s", cmdStr)
+	}
+}
+
+func TestSubRange_WithSpeedEffect(t *testing.T) {
+	// 30s clip with SpeedUp(2.0) → Duration()=15s.
+	// Placed at 0s. SubRange(5, 10): clip-local 5-10s.
+	// Source: ratio=2.0, so source 10-20s. Duration = 5s.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+	v := clip.NewVideoWithDuration("footage.mp4", 30*time.Second).
+		WithEffect(effects.SpeedUp(2.0))
+	track.Add(v, At(0))
+
+	sub := tl.SubRange(5*time.Second, 10*time.Second)
+	entries := sub.VideoTracks()[0].Entries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].Clip.Duration() != 5*time.Second {
+		t.Errorf("expected duration 5s, got %v", entries[0].Clip.Duration())
+	}
+	if entries[0].Clip.TrimStart() != 10*time.Second {
+		t.Errorf("expected TrimStart 10s (source via ratio), got %v", entries[0].Clip.TrimStart())
+	}
+	if entries[0].Clip.TrimEnd() != 20*time.Second {
+		t.Errorf("expected TrimEnd 20s (source via ratio), got %v", entries[0].Clip.TrimEnd())
+	}
+	// Effects should be preserved.
+	effs := entries[0].Clip.Effects()
+	if len(effs) != 1 || effs[0].Name() != "speed" {
+		t.Errorf("expected speed effect preserved, got %v", effs)
+	}
+}
+
+func TestDryRunRange_WithSpeedEffect(t *testing.T) {
+	// Verify FFmpeg command for speed-effected sub-ranged clip.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+	track := tl.AddVideoTrack("main")
+	v := clip.NewVideoWithDuration("footage.mp4", 30*time.Second).
+		WithEffect(effects.SpeedUp(2.0)).
+		WithEffect(effects.AudioSpeed(2.0))
+	track.Add(v, At(0))
+
+	cmd, err := tl.DryRunRange(5*time.Second, 10*time.Second, export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRunRange returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+	// Source coordinates 10-20s.
+	if !strings.Contains(cmdStr, "start=10.000") {
+		t.Errorf("expected trim start=10.000, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "end=20.000") {
+		t.Errorf("expected trim end=20.000, got:\n%s", cmdStr)
+	}
+	// Speed effects should still be applied.
+	if !strings.Contains(cmdStr, "setpts") {
+		t.Errorf("expected setpts for speed effect, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "atempo") {
+		t.Errorf("expected atempo for audio speed, got:\n%s", cmdStr)
 	}
 }
