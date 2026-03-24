@@ -908,6 +908,37 @@ func TestDryRun_HighSpeedAtempoChain(t *testing.T) {
 	}
 }
 
+func TestExportSilent_InvalidTimeline(t *testing.T) {
+	// ExportSilent on an invalid timeline should return a compilation error.
+	tl := New(Config{Width: 0, Height: 0, FPS: 30})
+	err := tl.ExportSilent(export.YouTube1080p(), "output.mp4")
+	if err == nil {
+		t.Error("expected error for ExportSilent on invalid timeline")
+	}
+	if !strings.Contains(err.Error(), "compilation failed") {
+		t.Errorf("expected compilation failed error, got: %v", err)
+	}
+}
+
+func TestPluralize(t *testing.T) {
+	tests := []struct {
+		n    int
+		s    string
+		want string
+	}{
+		{0, "track", "0 tracks"},
+		{1, "track", "1 track"},
+		{2, "track", "2 tracks"},
+		{5, "clip", "5 clips"},
+	}
+	for _, tt := range tests {
+		got := pluralize(tt.n, tt.s)
+		if got != tt.want {
+			t.Errorf("pluralize(%d, %q) = %q, want %q", tt.n, tt.s, got, tt.want)
+		}
+	}
+}
+
 func TestDecomposeAtempo(t *testing.T) {
 	tests := []struct {
 		name   string

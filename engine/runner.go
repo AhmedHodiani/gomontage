@@ -31,10 +31,29 @@ type Progress struct {
 
 	// Speed is the encoding speed relative to real-time (e.g. 2.5 means 2.5x faster).
 	Speed float64
+
+	// Percent is the estimated completion percentage (0-100).
+	// Only set when TotalDuration is provided via RunOptions.
+	Percent float64
+
+	// ETA is the estimated time remaining until the export completes.
+	// Only set when TotalDuration is provided and Speed > 0.
+	ETA time.Duration
 }
 
 // ProgressFunc is a callback invoked with progress updates during encoding.
 type ProgressFunc func(Progress)
+
+// RunOptions configures how an FFmpeg command is executed.
+type RunOptions struct {
+	// OnProgress is a callback invoked with progress updates during encoding.
+	// If nil, progress is not reported.
+	OnProgress ProgressFunc
+
+	// TotalDuration is the expected total duration of the output.
+	// When set, Progress.Percent and Progress.ETA are computed automatically.
+	TotalDuration time.Duration
+}
 
 // Run executes an FFmpeg command and blocks until it completes.
 // Returns an error if FFmpeg exits with a non-zero status.
@@ -49,6 +68,12 @@ func RunWithProgress(cmd *Command, onProgress ProgressFunc) error {
 
 // RunContext executes an FFmpeg command with context support and optional progress reporting.
 func RunContext(ctx context.Context, cmd *Command, onProgress ProgressFunc) error {
+	return RunContextOpts(ctx, cmd, RunOptions{OnProgress: onProgress})
+}
+
+// RunContextOpts executes an FFmpeg command with full control over progress
+// reporting, ETA calculation, and stderr capture.
+func RunContextOpts(ctx context.Context, cmd *Command, opts RunOptions) error {
 	proc := exec.CommandContext(ctx, cmd.Binary, cmd.Args...)
 
 	// FFmpeg writes progress info to stderr.
@@ -62,10 +87,15 @@ func RunContext(ctx context.Context, cmd *Command, onProgress ProgressFunc) erro
 	}
 
 	// Parse progress from stderr in a goroutine.
-	done := make(chan error, 1)
+	type result struct {
+		err        error
+		stderrTail []string
+	}
+	done := make(chan result, 1)
 	go func() {
-		parseProgress(stderr, onProgress)
-		done <- proc.Wait()
+		tail := parseProgressOpts(stderr, opts)
+		waitErr := proc.Wait()
+		done <- result{err: waitErr, stderrTail: tail}
 	}()
 
 	select {
@@ -74,12 +104,38 @@ func RunContext(ctx context.Context, cmd *Command, onProgress ProgressFunc) erro
 		_ = proc.Process.Kill()
 		<-done // Wait for goroutine to finish.
 		return ctx.Err()
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("ffmpeg failed: %w", err)
+	case r := <-done:
+		if r.err != nil {
+			return newFFmpegError(r.err, r.stderrTail)
 		}
 		return nil
 	}
+}
+
+// maxStderrLines is the maximum number of non-progress stderr lines to keep
+// in the ring buffer for error reporting.
+const maxStderrLines = 25
+
+// FFmpegError wraps an FFmpeg process error with captured stderr output
+// for debugging.
+type FFmpegError struct {
+	Err        error
+	StderrTail []string
+}
+
+func (e *FFmpegError) Error() string {
+	if len(e.StderrTail) == 0 {
+		return fmt.Sprintf("ffmpeg failed: %v", e.Err)
+	}
+	return fmt.Sprintf("ffmpeg failed: %v\n%s", e.Err, strings.Join(e.StderrTail, "\n"))
+}
+
+func (e *FFmpegError) Unwrap() error {
+	return e.Err
+}
+
+func newFFmpegError(err error, stderrTail []string) *FFmpegError {
+	return &FFmpegError{Err: err, StderrTail: stderrTail}
 }
 
 // progressRegex matches FFmpeg progress output lines like:
@@ -88,12 +144,29 @@ var progressRegex = regexp.MustCompile(
 	`frame=\s*(\d+)\s+fps=\s*([\d.]+)\s+.*size=\s*(\S+)\s+time=\s*(\S+)\s+bitrate=\s*(\S+)\s+speed=\s*(\S+)`,
 )
 
-// parseProgress reads FFmpeg stderr output and invokes the callback on each progress line.
-func parseProgress(r io.Reader, onProgress ProgressFunc) {
-	if onProgress == nil {
-		// Drain the reader even if we don't need progress.
-		_, _ = io.Copy(io.Discard, r)
-		return
+// parseProgressOpts reads FFmpeg stderr output, invokes the progress callback,
+// computes Percent/ETA when TotalDuration is set, and returns the last N
+// non-progress lines for error reporting.
+func parseProgressOpts(r io.Reader, opts RunOptions) []string {
+	// Ring buffer for non-progress stderr lines.
+	stderrBuf := make([]string, 0, maxStderrLines)
+
+	if opts.OnProgress == nil {
+		// Even without a progress callback, capture stderr for error reporting.
+		scanner := bufio.NewScanner(r)
+		scanner.Split(splitOnCRorLF)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			// Skip progress lines from the buffer — they're not useful for errors.
+			if progressRegex.MatchString(line) {
+				continue
+			}
+			stderrBuf = appendRing(stderrBuf, line, maxStderrLines)
+		}
+		return stderrBuf
 	}
 
 	scanner := bufio.NewScanner(r)
@@ -104,6 +177,10 @@ func parseProgress(r io.Reader, onProgress ProgressFunc) {
 		line := scanner.Text()
 		matches := progressRegex.FindStringSubmatch(line)
 		if matches == nil {
+			trimmed := strings.TrimSpace(line)
+			if trimmed != "" {
+				stderrBuf = appendRing(stderrBuf, trimmed, maxStderrLines)
+			}
 			continue
 		}
 
@@ -126,8 +203,36 @@ func parseProgress(r io.Reader, onProgress ProgressFunc) {
 			p.Speed = v
 		}
 
-		onProgress(p)
+		// Compute Percent and ETA when total duration is known.
+		if opts.TotalDuration > 0 && p.Time > 0 {
+			p.Percent = float64(p.Time) / float64(opts.TotalDuration) * 100
+			if p.Percent > 100 {
+				p.Percent = 100
+			}
+			if p.Speed > 0 {
+				remaining := opts.TotalDuration - p.Time
+				if remaining > 0 {
+					p.ETA = time.Duration(float64(remaining) / p.Speed)
+				}
+			}
+		}
+
+		opts.OnProgress(p)
 	}
+
+	return stderrBuf
+}
+
+// appendRing appends a line to a ring buffer, dropping the oldest entry
+// when the buffer is full.
+func appendRing(buf []string, line string, max int) []string {
+	if len(buf) < max {
+		return append(buf, line)
+	}
+	// Shift left and replace last.
+	copy(buf, buf[1:])
+	buf[max-1] = line
+	return buf
 }
 
 // parseFFmpegTime parses an FFmpeg time string like "00:01:23.45" into a Duration.
