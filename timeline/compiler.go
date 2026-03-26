@@ -63,100 +63,77 @@ func (c *Compiler) getOrAddInput(path string) *engine.Node {
 	return node
 }
 
+// trackStream holds the compiled video and audio output labels for a single
+// video track after its clips have been processed and concatenated.
+type trackStream struct {
+	video string // final video label for this track
+	audio string // final audio label for this track (may be empty)
+}
+
 // Compile transforms the timeline into an FFmpeg filter graph.
 // The resulting graph can be built into a Command via engine.BuildCommand.
+//
+// Video tracks are composited in layer order: track 0 is the bottom (background)
+// and each subsequent track is overlaid on top using FFmpeg's overlay filter.
+// Transparent PNGs and RGBA video sources are supported via overlay=format=auto.
+//
+// All audio tracks (including audio embedded in video clips) are mixed together
+// using amix, so narration, background music, and sound effects all stack.
 func (c *Compiler) Compile(outputPath string, outputParams map[string]string) (*engine.Graph, error) {
 	if err := c.timeline.Validate(); err != nil {
 		return nil, fmt.Errorf("timeline validation failed: %w", err)
 	}
 
 	cfg := c.timeline.Config()
+	timelineDur := c.timeline.Duration()
 
-	// Phase 1: Process each video track — trim, apply per-clip effects.
-	// Also compile the audio stream from video clips that have audio,
-	// so that video and its accompanying audio can be concatenated together.
-	var videoLabels []clipLabel
+	// Phase 1: Compile each video track independently into its own stream.
+	// Each track's clips are sorted, gap-filled, and concatenated in isolation.
+	// This produces one video label (and optionally one audio label) per track.
+	var trackStreams []trackStream
 	for _, track := range c.timeline.videoTracks {
-		for _, entry := range track.Entries() {
-			labels, err := c.compileVideoEntry(entry, cfg)
-			if err != nil {
-				return nil, fmt.Errorf("track %q: %w", track.Name(), err)
-			}
-			// For video clips that have audio, compile the audio stream too.
-			for i, cl := range labels {
-				if cl.entry.Clip.HasAudio() && cl.entry.Clip.SourcePath() != "" {
-					audioLabel, err := c.compileAudioFromVideoEntry(cl.entry)
-					if err != nil {
-						return nil, fmt.Errorf("track %q audio: %w", track.Name(), err)
-					}
-					labels[i].audio = audioLabel
-				}
-			}
-			videoLabels = append(videoLabels, labels...)
+		if len(track.Entries()) == 0 {
+			continue
 		}
+		ts, err := c.compileTrack(track, cfg, timelineDur)
+		if err != nil {
+			return nil, fmt.Errorf("track %q: %w", track.Name(), err)
+		}
+		trackStreams = append(trackStreams, ts)
 	}
 
-	// Phase 1b: Sort video clips by StartAt and insert gap clips so that
-	// concat produces correctly timed output. Without this, clips placed
-	// at specific absolute times via Add(clip, At(T)) would be concatenated
-	// back-to-back, ignoring the requested positions.
-	if len(videoLabels) > 1 {
-		sort.SliceStable(videoLabels, func(i, j int) bool {
-			return videoLabels[i].entry.StartAt < videoLabels[j].entry.StartAt
-		})
-	}
-	videoLabels = c.insertVideoGaps(videoLabels, cfg)
-
-	// Phase 2: Concatenate video clips (and their paired audio) if there are multiple.
-	// Audio from video clips must be concatenated in sync with the video, not mixed.
+	// Phase 2: Composite video tracks together.
+	// Single track → use directly (no overlay needed, keeps old behaviour).
+	// Multiple tracks → chain overlay filters: track[0] is base, each
+	// subsequent track is overlaid on top with format=auto (supports RGBA/alpha).
 	finalVideoLabel := ""
-	finalVideoAudioLabel := ""
-	if len(videoLabels) == 1 {
-		finalVideoLabel = videoLabels[0].video
-		finalVideoAudioLabel = videoLabels[0].audio
-	} else if len(videoLabels) > 1 {
-		finalVideoLabel, finalVideoAudioLabel = c.concatVideoClips(videoLabels)
-	}
+	var videoAudioLabels []string // audio from video tracks, to be mixed later
 
-	// Phase 2b: Apply timeline delay to the final video/audio.
-	// After gap insertion, the only case requiring a global offset is when
-	// a single clip has StartAt > 0 (gap insertion only activates for multi-clip tracks).
-	if len(videoLabels) == 1 {
-		firstStartAt := videoLabels[0].entry.StartAt
-		if firstStartAt > 0 {
-			// Apply tpad to delay video.
-			tpadNode := c.graph.AddFilter("tpad", map[string]string{
-				"start_duration": formatSeconds(firstStartAt),
-				"color":          "black",
-			})
-			tpadLabel := c.nextLabelFor("vpad", tpadNode)
-			c.graph.Connect(
-				c.findFilterByLabel(finalVideoLabel),
-				tpadNode,
-				finalVideoLabel,
-				engine.StreamVideo,
-			)
-			finalVideoLabel = tpadLabel
-
-			// Apply adelay to paired audio from video.
-			if finalVideoAudioLabel != "" {
-				delayNode := c.graph.AddFilter("adelay", map[string]string{
-					"delays": fmt.Sprintf("%d|%d", firstStartAt.Milliseconds(), firstStartAt.Milliseconds()),
-				})
-				delayLabel := c.nextLabelFor("vadel", delayNode)
-				c.graph.Connect(
-					c.findFilterByLabel(finalVideoAudioLabel),
-					delayNode,
-					finalVideoAudioLabel,
-					engine.StreamAudio,
-				)
-				finalVideoAudioLabel = delayLabel
+	switch len(trackStreams) {
+	case 0:
+		// No video tracks — nothing to composite.
+	case 1:
+		finalVideoLabel = trackStreams[0].video
+		if trackStreams[0].audio != "" {
+			videoAudioLabels = append(videoAudioLabels, trackStreams[0].audio)
+		}
+	default:
+		// Collect audio from all tracks.
+		for _, ts := range trackStreams {
+			if ts.audio != "" {
+				videoAudioLabels = append(videoAudioLabels, ts.audio)
 			}
 		}
+		// Chain overlay filters bottom-up.
+		finalVideoLabel = c.overlayTracks(trackStreams)
 	}
 
-	// Phase 3: Process independent audio tracks (background music, narration, etc.).
+	// Phase 3: Process independent audio tracks (narration, bgm, sfx, etc.).
+	// All clips within each audio track are processed independently and their
+	// labels collected; they will all be mixed together in Phase 4.
 	var audioLabels []string
+	// Prepend audio from video tracks so it is mixed with independent audio.
+	audioLabels = append(audioLabels, videoAudioLabels...)
 	for _, track := range c.timeline.audioTracks {
 		for _, entry := range track.Entries() {
 			label, err := c.compileAudioEntry(entry)
@@ -169,13 +146,9 @@ func (c *Compiler) Compile(outputPath string, outputParams map[string]string) (*
 		}
 	}
 
-	// Add the concatenated audio from video tracks as one of the audio streams
-	// to be mixed with independent audio tracks.
-	if finalVideoAudioLabel != "" {
-		audioLabels = append([]string{finalVideoAudioLabel}, audioLabels...)
-	}
-
-	// Phase 4: Mix audio if there are multiple independent audio streams.
+	// Phase 4: Mix all audio streams together.
+	// amix naturally stacks any number of streams, so narration + bgm + sfx
+	// all combine correctly regardless of how many audio tracks there are.
 	finalAudioLabel := ""
 	if len(audioLabels) == 1 {
 		finalAudioLabel = audioLabels[0]
@@ -183,13 +156,12 @@ func (c *Compiler) Compile(outputPath string, outputParams map[string]string) (*
 		finalAudioLabel = c.mixAudio(audioLabels)
 	}
 
-	// Phase 5: Create output node.
+	// Phase 5: Create output node and wire up final streams.
 	if outputParams == nil {
 		outputParams = make(map[string]string)
 	}
 	output := c.graph.AddOutput(outputPath, outputParams)
 
-	// Map final video and audio to output.
 	if finalVideoLabel != "" {
 		c.graph.Connect(
 			c.findFilterByLabel(finalVideoLabel),
@@ -208,6 +180,129 @@ func (c *Compiler) Compile(outputPath string, outputParams map[string]string) (*
 	}
 
 	return c.graph, nil
+}
+
+// compileTrack compiles a single VideoTrack into a trackStream.
+// It processes each clip, sorts by StartAt, inserts black gap clips for any
+// time gaps (including before the first clip), and concatenates everything into
+// a single video stream. Audio embedded in video clips is concatenated in sync.
+//
+// timelineDur is the total duration of the timeline. If this track is shorter,
+// it is padded with black (and silence) to match, so that overlay compositing
+// works correctly for the full duration.
+func (c *Compiler) compileTrack(track *VideoTrack, cfg Config, timelineDur time.Duration) (trackStream, error) {
+	// Step 1: compile every clip entry on this track.
+	var labels []clipLabel
+	for _, entry := range track.Entries() {
+		cls, err := c.compileVideoEntry(entry, cfg)
+		if err != nil {
+			return trackStream{}, err
+		}
+		// Compile embedded audio from video clips.
+		for i, cl := range cls {
+			if cl.entry.Clip.HasAudio() && cl.entry.Clip.SourcePath() != "" {
+				audioLabel, err := c.compileAudioFromVideoEntry(cl.entry)
+				if err != nil {
+					return trackStream{}, fmt.Errorf("audio: %w", err)
+				}
+				cls[i].audio = audioLabel
+			}
+		}
+		labels = append(labels, cls...)
+	}
+
+	// Step 2: sort by StartAt and insert gap clips for any time gaps.
+	if len(labels) > 1 {
+		sort.SliceStable(labels, func(i, j int) bool {
+			return labels[i].entry.StartAt < labels[j].entry.StartAt
+		})
+	}
+	labels = c.insertVideoGaps(labels, cfg)
+
+	// Step 3: concatenate (or pass through if single clip).
+	var videoLabel, audioLabel string
+	switch len(labels) {
+	case 0:
+		return trackStream{}, nil
+	case 1:
+		videoLabel = labels[0].video
+		audioLabel = labels[0].audio
+		// Single-clip: if it starts at a non-zero time, pad the front.
+		firstStartAt := labels[0].entry.StartAt
+		if firstStartAt > 0 {
+			tpadNode := c.graph.AddFilter("tpad", map[string]string{
+				"start_duration": formatSeconds(firstStartAt),
+				"color":          "black",
+			})
+			tpadLabel := c.nextLabelFor("vpad", tpadNode)
+			c.graph.Connect(c.findFilterByLabel(videoLabel), tpadNode, videoLabel, engine.StreamVideo)
+			videoLabel = tpadLabel
+
+			if audioLabel != "" {
+				delayNode := c.graph.AddFilter("adelay", map[string]string{
+					"delays": fmt.Sprintf("%d|%d", firstStartAt.Milliseconds(), firstStartAt.Milliseconds()),
+				})
+				delayLabel := c.nextLabelFor("vadel", delayNode)
+				c.graph.Connect(c.findFilterByLabel(audioLabel), delayNode, audioLabel, engine.StreamAudio)
+				audioLabel = delayLabel
+			}
+		}
+	default:
+		videoLabel, audioLabel = c.concatVideoClips(labels)
+	}
+
+	// Step 4: if the track is shorter than the full timeline, pad the tail with
+	// black frames (and silence) so overlay compositing covers the whole duration.
+	trackEnd := track.End()
+	if timelineDur > trackEnd {
+		tailDur := timelineDur - trackEnd
+		tpadNode := c.graph.AddFilter("tpad", map[string]string{
+			"stop_duration": formatSeconds(tailDur),
+			"color":         "black",
+		})
+		tpadLabel := c.nextLabelFor("vtail", tpadNode)
+		c.graph.Connect(c.findFilterByLabel(videoLabel), tpadNode, videoLabel, engine.StreamVideo)
+		videoLabel = tpadLabel
+
+		if audioLabel != "" {
+			apadNode := c.graph.AddFilter("apad", map[string]string{
+				"pad_dur": formatSeconds(tailDur),
+			})
+			apadLabel := c.nextLabelFor("atail", apadNode)
+			c.graph.Connect(c.findFilterByLabel(audioLabel), apadNode, audioLabel, engine.StreamAudio)
+			audioLabel = apadLabel
+		}
+	}
+
+	return trackStream{video: videoLabel, audio: audioLabel}, nil
+}
+
+// overlayTracks chains overlay filters across all track streams.
+// trackStreams[0] is the bottom (background) layer; each subsequent stream is
+// composited on top. overlay=format=auto is used so that RGBA sources (e.g.
+// transparent PNGs) are handled correctly — the alpha channel is respected.
+func (c *Compiler) overlayTracks(trackStreams []trackStream) string {
+	// Start with the bottom track as the base.
+	baseLabel := trackStreams[0].video
+
+	for i := 1; i < len(trackStreams); i++ {
+		topLabel := trackStreams[i].video
+
+		overlayNode := c.graph.AddFilter("overlay", map[string]string{
+			"x":      "0",
+			"y":      "0",
+			"format": "auto",
+		})
+		overlayLabel := c.nextLabelFor("voverlay", overlayNode)
+
+		// overlay expects [base][top] as its two inputs.
+		c.graph.Connect(c.findFilterByLabel(baseLabel), overlayNode, baseLabel, engine.StreamVideo)
+		c.graph.Connect(c.findFilterByLabel(topLabel), overlayNode, topLabel, engine.StreamVideo)
+
+		baseLabel = overlayLabel
+	}
+
+	return baseLabel
 }
 
 // clipLabel holds the output labels for a processed clip.

@@ -985,3 +985,217 @@ func TestDecomposeAtempo(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Multi-track overlay tests
+// ---------------------------------------------------------------------------
+
+func TestDryRun_TwoVideoTracks_Overlay(t *testing.T) {
+	// Two video tracks with clips at the same time must produce an overlay
+	// filter, not two independent concat segments.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	base := tl.AddVideoTrack("base")
+	base.Add(clip.NewVideoWithDuration("background.mp4", 10*time.Second).VideoOnly(), At(0))
+
+	top := tl.AddVideoTrack("top")
+	top.Add(clip.NewImage("overlay.png").WithSize(1920, 1080).WithDuration(10*time.Second), At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// The overlay filter must be present.
+	if !strings.Contains(cmdStr, "overlay") {
+		t.Errorf("expected overlay filter for two video tracks, got:\n%s", cmdStr)
+	}
+
+	// format=auto must be set so transparent PNGs work correctly.
+	if !strings.Contains(cmdStr, "format=auto") {
+		t.Errorf("expected overlay with format=auto for alpha support, got:\n%s", cmdStr)
+	}
+
+	// Both inputs must be present.
+	if !strings.Contains(cmdStr, "background.mp4") {
+		t.Errorf("expected background.mp4 in command, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "overlay.png") {
+		t.Errorf("expected overlay.png in command, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_ThreeVideoTracks_ChainedOverlay(t *testing.T) {
+	// Three video tracks must produce two chained overlay filters.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	base := tl.AddVideoTrack("base")
+	base.Add(clip.NewVideoWithDuration("background.mp4", 10*time.Second).VideoOnly(), At(0))
+
+	mid := tl.AddVideoTrack("mid")
+	mid.Add(clip.NewImage("layer1.png").WithSize(1920, 1080).WithDuration(10*time.Second), At(0))
+
+	top := tl.AddVideoTrack("top")
+	top.Add(clip.NewImage("layer2.png").WithSize(1920, 1080).WithDuration(10*time.Second), At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// Two overlay filters must be present (one per layer pair).
+	overlayCount := strings.Count(cmdStr, "overlay=")
+	if overlayCount < 2 {
+		t.Errorf("expected at least 2 overlay filters for 3 tracks, got %d in:\n%s", overlayCount, cmdStr)
+	}
+
+	// All three inputs must be in the command.
+	if !strings.Contains(cmdStr, "background.mp4") {
+		t.Errorf("expected background.mp4, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "layer1.png") {
+		t.Errorf("expected layer1.png, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "layer2.png") {
+		t.Errorf("expected layer2.png, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_SingleVideoTrack_NoOverlay(t *testing.T) {
+	// A single video track must NOT produce an overlay filter (backwards compat).
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	track := tl.AddVideoTrack("main")
+	track.Add(clip.NewVideoWithDuration("clip.mp4", 10*time.Second).VideoOnly(), At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	if strings.Contains(cmdStr, "overlay") {
+		t.Errorf("single video track should not produce overlay filter, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_TwoVideoTracks_TwoAudioTracks_AllMixed(t *testing.T) {
+	// Video tracks with audio + independent audio tracks must all be mixed
+	// together via amix, not silently dropped.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	// Video track with embedded audio.
+	vTrack := tl.AddVideoTrack("main")
+	vTrack.Add(clip.NewVideoWithDuration("footage.mp4", 10*time.Second), At(0))
+
+	// Second video track (silent image).
+	imgTrack := tl.AddVideoTrack("overlay")
+	imgTrack.Add(clip.NewImage("frame.png").WithSize(1920, 1080).WithDuration(10*time.Second), At(0))
+
+	// Two independent audio tracks.
+	narTrack := tl.AddAudioTrack("narration")
+	narTrack.Add(clip.NewAudioWithDuration("narration.mp3", 10*time.Second), At(0))
+
+	sfxTrack := tl.AddAudioTrack("sfx")
+	sfxTrack.Add(clip.NewAudioWithDuration("sfx.mp3", 5*time.Second), At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// overlay must be present for the two video tracks.
+	if !strings.Contains(cmdStr, "overlay") {
+		t.Errorf("expected overlay filter, got:\n%s", cmdStr)
+	}
+
+	// amix must be present to mix all audio streams.
+	if !strings.Contains(cmdStr, "amix") {
+		t.Errorf("expected amix filter to mix all audio streams, got:\n%s", cmdStr)
+	}
+
+	// All inputs must be present.
+	for _, input := range []string{"footage.mp4", "frame.png", "narration.mp3", "sfx.mp3"} {
+		if !strings.Contains(cmdStr, input) {
+			t.Errorf("expected %s in command, got:\n%s", input, cmdStr)
+		}
+	}
+}
+
+func TestDryRun_TwoVideoTracks_TracksAreIndependentlyConcat(t *testing.T) {
+	// Each track's clips must be concatenated independently before overlay.
+	// Track "base" has two clips at 0s and 5s; track "top" has one clip at 0s.
+	// The overlay filter must receive one stream per track (each already
+	// concatenated), not four separate concat segments.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	base := tl.AddVideoTrack("base")
+	base.Add(clip.NewVideoWithDuration("a.mp4", 5*time.Second).VideoOnly(), At(0))
+	base.Add(clip.NewVideoWithDuration("b.mp4", 5*time.Second).VideoOnly(), At(5*time.Second))
+
+	top := tl.AddVideoTrack("top")
+	top.Add(clip.NewImage("banner.png").WithSize(1920, 1080).WithDuration(10*time.Second), At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// Must have both concat (for the base track) and overlay.
+	if !strings.Contains(cmdStr, "concat") {
+		t.Errorf("expected concat filter for base track's two clips, got:\n%s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "overlay") {
+		t.Errorf("expected overlay filter for two tracks, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_MultipleAudioTracks_AllMixed(t *testing.T) {
+	// Multiple independent audio tracks must all be mixed together via amix.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	vTrack := tl.AddVideoTrack("main")
+	vTrack.Add(clip.NewVideoWithDuration("video.mp4", 10*time.Second).VideoOnly(), At(0))
+
+	nar := tl.AddAudioTrack("narration")
+	nar.Add(clip.NewAudioWithDuration("narration.mp3", 10*time.Second), At(0))
+
+	bgm := tl.AddAudioTrack("bgm")
+	bgm.Add(clip.NewAudioWithDuration("music.mp3", 10*time.Second), At(0))
+
+	sfx := tl.AddAudioTrack("sfx")
+	sfx.Add(clip.NewAudioWithDuration("sfx.wav", 3*time.Second), At(2*time.Second))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// amix must be present.
+	if !strings.Contains(cmdStr, "amix") {
+		t.Errorf("expected amix for multiple audio tracks, got:\n%s", cmdStr)
+	}
+
+	// amix must mix 3 streams.
+	if !strings.Contains(cmdStr, "inputs=3") {
+		t.Errorf("expected amix with inputs=3 for 3 audio tracks, got:\n%s", cmdStr)
+	}
+
+	// All audio files must be present.
+	for _, f := range []string{"narration.mp3", "music.mp3", "sfx.wav"} {
+		if !strings.Contains(cmdStr, f) {
+			t.Errorf("expected %s in command, got:\n%s", f, cmdStr)
+		}
+	}
+}
