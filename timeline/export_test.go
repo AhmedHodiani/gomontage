@@ -1199,3 +1199,83 @@ func TestDryRun_MultipleAudioTracks_AllMixed(t *testing.T) {
 		}
 	}
 }
+
+func TestDryRun_OverlayTrack_ImagePreservesAlpha(t *testing.T) {
+	// An image on an overlay track (index > 0) must use yuva420p so its alpha
+	// channel is preserved for the overlay filter. The base track uses yuv420p.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	base := tl.AddVideoTrack("base")
+	base.Add(clip.NewVideoWithDuration("background.mp4", 5*time.Second).VideoOnly(), At(0))
+
+	top := tl.AddVideoTrack("top")
+	top.Add(clip.NewImage("transparent.png").WithSize(1920, 1080).WithDuration(5*time.Second), At(0))
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// yuva420p must be present for the overlay track's image.
+	if !strings.Contains(cmdStr, "yuva420p") {
+		t.Errorf("expected yuva420p for image on overlay track to preserve alpha, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_OverlayTrack_FadeUsesAlpha(t *testing.T) {
+	// Fades on an overlay track must include alpha=1 so they affect opacity
+	// (fade through transparency) rather than fading RGB values to/from black.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	base := tl.AddVideoTrack("base")
+	base.Add(clip.NewVideoWithDuration("background.mp4", 10*time.Second).VideoOnly(), At(0))
+
+	top := tl.AddVideoTrack("top")
+	top.Add(
+		clip.NewImage("overlay.png").WithSize(1920, 1080).WithDuration(10*time.Second).
+			WithFadeIn(500*time.Millisecond).WithFadeOut(500*time.Millisecond),
+		At(0),
+	)
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// alpha=1 must be present on the fade filters for the overlay track.
+	if !strings.Contains(cmdStr, "alpha=1") {
+		t.Errorf("expected alpha=1 on fade filters for overlay track, got:\n%s", cmdStr)
+	}
+}
+
+func TestDryRun_BaseTrack_FadeNoAlpha(t *testing.T) {
+	// Fades on the base track (index 0) must NOT have alpha=1 — they should
+	// fade RGB values to/from black as normal.
+	tl := New(Config{Width: 1920, Height: 1080, FPS: 30})
+
+	base := tl.AddVideoTrack("base")
+	base.Add(
+		clip.NewVideoWithDuration("clip.mp4", 10*time.Second).VideoOnly().
+			WithFadeIn(500*time.Millisecond).WithFadeOut(500*time.Millisecond),
+		At(0),
+	)
+
+	cmd, err := tl.DryRun(export.YouTube1080p(), "output.mp4")
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	cmdStr := cmd.String()
+
+	// There must be fade filters, but no alpha=1.
+	if !strings.Contains(cmdStr, "fade") {
+		t.Errorf("expected fade filters on base track, got:\n%s", cmdStr)
+	}
+	if strings.Contains(cmdStr, "alpha=1") {
+		t.Errorf("base track fades should not have alpha=1, got:\n%s", cmdStr)
+	}
+}

@@ -191,10 +191,15 @@ func (c *Compiler) Compile(outputPath string, outputParams map[string]string) (*
 // it is padded with black (and silence) to match, so that overlay compositing
 // works correctly for the full duration.
 func (c *Compiler) compileTrack(track *VideoTrack, cfg Config, timelineDur time.Duration) (trackStream, error) {
+	// isOverlay is true for any track that sits on top of another track.
+	// Overlay tracks must preserve alpha so that transparent regions show
+	// the layers beneath, and fades must affect opacity rather than RGB.
+	isOverlay := track.Index() > 0
+
 	// Step 1: compile every clip entry on this track.
 	var labels []clipLabel
 	for _, entry := range track.Entries() {
-		cls, err := c.compileVideoEntry(entry, cfg)
+		cls, err := c.compileVideoEntry(entry, cfg, isOverlay)
 		if err != nil {
 			return trackStream{}, err
 		}
@@ -313,7 +318,15 @@ type clipLabel struct {
 }
 
 // compileVideoEntry processes a single video clip placement into filter nodes.
-func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, error) {
+//
+// isOverlay indicates that this clip lives on an overlay track (index > 0).
+// When true:
+//   - pixel format is kept as yuva420p instead of being converted to yuv420p,
+//     so that alpha channels from transparent PNGs are preserved for the overlay filter.
+//   - fade filters are applied with alpha=1 so they fade the opacity rather than
+//     the RGB values — this makes the clip fade in/out through transparency instead
+//     of fading to/from black.
+func (c *Compiler) compileVideoEntry(entry Placement, cfg Config, isOverlay bool) ([]clipLabel, error) {
 	cl := entry.Clip
 	path := cl.SourcePath()
 
@@ -379,12 +392,18 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 			lastNode = scaleNode
 		}
 
-		// Image clips need pixel format normalization to yuv420p so they can
-		// be concatenated with video clips (which are typically yuv420p).
+		// Image clips need pixel format normalization so they can be
+		// concatenated with video clips. On overlay tracks we keep the alpha
+		// channel (yuva420p) so transparent regions are visible through the
+		// overlay. On the base track we convert to yuv420p (no alpha needed).
 		// Generated clips (color, text) already get this in compileGeneratedClip.
 		if cl.ClipType() == clip.TypeImage {
+			pixFmt := "yuv420p"
+			if isOverlay {
+				pixFmt = "yuva420p"
+			}
 			fmtNode := c.graph.AddFilter("format", map[string]string{
-				"pix_fmts": "yuv420p",
+				"pix_fmts": pixFmt,
 			})
 			fmtLabel := c.nextLabelFor("imgfmt", fmtNode)
 			c.graph.Connect(lastNode, fmtNode, currentLabel, engine.StreamVideo)
@@ -394,12 +413,19 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 	}
 
 	// Apply fade in (works for both generated and file-based clips).
+	// On overlay tracks, alpha=1 fades the opacity (alpha channel) rather than
+	// the RGB values — the clip fades in from transparent, showing the layers
+	// beneath, instead of fading in from black.
 	if cl.FadeInDuration() > 0 {
-		fadeNode := c.graph.AddFilter("fade", map[string]string{
+		fadeParams := map[string]string{
 			"t":  "in",
 			"st": "0",
 			"d":  formatSeconds(cl.FadeInDuration()),
-		})
+		}
+		if isOverlay {
+			fadeParams["alpha"] = "1"
+		}
+		fadeNode := c.graph.AddFilter("fade", fadeParams)
 		fadeLabel := c.nextLabelFor("vfin", fadeNode)
 		c.graph.Connect(lastNode, fadeNode, currentLabel, engine.StreamVideo)
 		currentLabel = fadeLabel
@@ -407,13 +433,19 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config) ([]clipLabel, 
 	}
 
 	// Apply fade out (works for both generated and file-based clips).
+	// On overlay tracks, alpha=1 fades the opacity so the clip fades out to
+	// transparent rather than to black.
 	if cl.FadeOutDuration() > 0 {
 		fadeOutStart := cl.Duration() - cl.FadeOutDuration()
-		fadeNode := c.graph.AddFilter("fade", map[string]string{
+		fadeParams := map[string]string{
 			"t":  "out",
 			"st": formatSeconds(fadeOutStart),
 			"d":  formatSeconds(cl.FadeOutDuration()),
-		})
+		}
+		if isOverlay {
+			fadeParams["alpha"] = "1"
+		}
+		fadeNode := c.graph.AddFilter("fade", fadeParams)
 		fadeLabel := c.nextLabelFor("vfout", fadeNode)
 		c.graph.Connect(lastNode, fadeNode, currentLabel, engine.StreamVideo)
 		currentLabel = fadeLabel
