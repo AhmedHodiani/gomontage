@@ -390,6 +390,18 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config, isOverlay bool
 			c.graph.Connect(lastNode, scaleNode, currentLabel, engine.StreamVideo)
 			currentLabel = scaleLabel
 			lastNode = scaleNode
+
+			// Normalize SAR to 1:1 after scaling so that clips from different
+			// source files (which may encode different Sample Aspect Ratios,
+			// e.g. 45:34 vs 27:20) all present square pixels to the concat
+			// filter. Without this, FFmpeg's concat filter rejects the stream.
+			sarsNode := c.graph.AddFilter("setsar", map[string]string{
+				"ratio": "1/1",
+			})
+			sarsLabel := c.nextLabelFor("vsar", sarsNode)
+			c.graph.Connect(lastNode, sarsNode, currentLabel, engine.StreamVideo)
+			currentLabel = sarsLabel
+			lastNode = sarsNode
 		}
 
 		// Image clips need pixel format normalization so they can be
