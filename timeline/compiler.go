@@ -378,23 +378,38 @@ func (c *Compiler) compileVideoEntry(entry Placement, cfg Config, isOverlay bool
 			lastNode = setptsNode
 		}
 
-		// Scale file-based clips to the timeline resolution so all segments
-		// match when concatenated. The timeline config is the single source
-		// of truth for output dimensions, just like a real NLE.
+		// Scale file-based clips to fit within the timeline resolution while
+		// preserving the original aspect ratio (letterbox/pillarbox). Then pad
+		// any remaining space with black so the output is exactly the target
+		// dimensions. Finally normalise SAR to 1:1 so that clips from different
+		// source files (which may carry different Sample Aspect Ratios, e.g.
+		// 45:34 vs 27:20) all present square pixels to the concat filter.
 		if cfg.Width > 0 && cfg.Height > 0 {
 			scaleNode := c.graph.AddFilter("scale", map[string]string{
-				"w": fmt.Sprintf("%d", cfg.Width),
-				"h": fmt.Sprintf("%d", cfg.Height),
+				"w":                           fmt.Sprintf("%d", cfg.Width),
+				"h":                           fmt.Sprintf("%d", cfg.Height),
+				"force_original_aspect_ratio": "decrease",
 			})
 			scaleLabel := c.nextLabelFor("vscale", scaleNode)
 			c.graph.Connect(lastNode, scaleNode, currentLabel, engine.StreamVideo)
 			currentLabel = scaleLabel
 			lastNode = scaleNode
 
-			// Normalize SAR to 1:1 after scaling so that clips from different
-			// source files (which may encode different Sample Aspect Ratios,
-			// e.g. 45:34 vs 27:20) all present square pixels to the concat
-			// filter. Without this, FFmpeg's concat filter rejects the stream.
+			// Pad to exact target size (centres the scaled image, fills the
+			// rest with black). x/y expressions centre the content.
+			padNode := c.graph.AddFilter("pad", map[string]string{
+				"w":     fmt.Sprintf("%d", cfg.Width),
+				"h":     fmt.Sprintf("%d", cfg.Height),
+				"x":     fmt.Sprintf("(%d-iw)/2", cfg.Width),
+				"y":     fmt.Sprintf("(%d-ih)/2", cfg.Height),
+				"color": "black",
+			})
+			padLabel := c.nextLabelFor("vpad", padNode)
+			c.graph.Connect(lastNode, padNode, currentLabel, engine.StreamVideo)
+			currentLabel = padLabel
+			lastNode = padNode
+
+			// Normalise SAR to 1:1 after pad so all clips are uniform.
 			sarsNode := c.graph.AddFilter("setsar", map[string]string{
 				"ratio": "1/1",
 			})
