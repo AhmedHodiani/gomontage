@@ -29,6 +29,7 @@ package gomontage
 import (
 	"time"
 
+	"github.com/ahmedhodiani/gomontage/kdenlive"
 	"github.com/ahmedhodiani/gomontage/timeline"
 )
 
@@ -132,4 +133,17 @@ func Seconds(s float64) time.Duration {
 //	clip.Trim(gomontage.Minutes(1), gomontage.Minutes(2.5))
 func Minutes(m float64) time.Duration {
 	return time.Duration(m * float64(time.Minute))
+}
+
+// ExportKdenlive exports the timeline as a .kdenlive project file that can be
+// opened in the Kdenlive video editor for further manual editing and rendering.
+//
+// Only file-backed clips (VideoClip, AudioClip, ImageClip) are supported.
+// Generated clips (ColorClip, TextClip) will cause an error.
+//
+// Example:
+//
+//	err := gomontage.ExportKdenlive(tl, "project.kdenlive")
+func ExportKdenlive(tl *timeline.Timeline, outputPath string) error {
+	return kdenlive.Export(tl, outputPath)
 }

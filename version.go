@@ -9,4 +9,4 @@ const Version = "0.2.5"
 
 // GoVersion is the minimum Go version required by the Gomontage framework.
 // Scaffolded projects use this in their go.mod directive.
-const GoVersion = "1.25"
+const GoVersion = "1.26"
